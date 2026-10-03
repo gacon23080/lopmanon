@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { soundManager } from '../lib/audio';
+import { useMusic } from './MusicPlayer';
 import shinChanPlaygroundBg from '../assets/images/empty_pastel_purple_kindergarten_school_1791023502965.jpg';
 
 interface SchoolGateProps {
@@ -8,30 +9,84 @@ interface SchoolGateProps {
 }
 
 export const SchoolGate: React.FC<SchoolGateProps> = ({ onEnterSchool }) => {
+  const { playMusic } = useMusic();
   const [showBellFrame, setShowBellFrame] = useState(false);
+  const [isRinging, setIsRinging] = useState(false);
+  const [needsInteraction, setNeedsInteraction] = useState(false);
+  const hasFinishedRef = useRef(false);
 
-  useEffect(() => {
-    // Tự động reo chuông trường báo giờ vào lớp
-    soundManager.playSchoolBell();
+  // Bắt đầu chuỗi chuông 6.0 giây
+  const startBell = useCallback(async () => {
+    if (hasFinishedRef.current) return;
 
-    // Sau khi tiếng chuông reo (~3.2s) thì mới hiện khung chuông reo
-    const timer = setTimeout(() => {
+    // Mở khóa âm thanh
+    await soundManager.unlockAudio();
+
+    const played = await soundManager.playSchoolBell(() => {
+      hasFinishedRef.current = true;
+      setIsRinging(false);
       setShowBellFrame(true);
-    }, 3200);
+    });
 
-    return () => clearTimeout(timer);
+    if (played) {
+      setIsRinging(true);
+      setNeedsInteraction(false);
+    } else {
+      // Trình duyệt chặn autoplay, cần người dùng chạm vào màn hình
+      setNeedsInteraction(true);
+      setIsRinging(false);
+    }
   }, []);
 
-  const handleEnter = () => {
-    // Bấm nút thì vào thẳng lớp học luôn, không phát chuông nữa
+  useEffect(() => {
+    // 1. Thử tự động phát chuông ngay khi vừa mở web
+    startBell();
+
+    // 2. Lắng nghe tương tác đầu tiên nếu trình duyệt chặn autoplay
+    const handleFirstGesture = async () => {
+      if (!hasFinishedRef.current && !soundManager.isBellPlaying) {
+        await startBell();
+      }
+    };
+
+    window.addEventListener('pointerdown', handleFirstGesture);
+    window.addEventListener('keydown', handleFirstGesture);
+
+    return () => {
+      window.removeEventListener('pointerdown', handleFirstGesture);
+      window.removeEventListener('keydown', handleFirstGesture);
+    };
+  }, [startBell]);
+
+  const handleEnter = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    // 1. Dập tắt triệt để toàn bộ tiếng chuông ngay tức khắc (0ms)
+    soundManager.stopAllSounds();
+    
+    // 2. Mở nhạc nền lớp học YouTube
+    playMusic();
     soundManager.playPop();
+    
+    // 3. Bước vào lớp học
     onEnterSchool();
   };
 
+  const handleManualRing = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    startBell();
+  };
+
   return (
-    <div className="fixed inset-0 w-screen h-screen overflow-hidden select-none flex flex-col justify-center items-center p-4 bg-[#2d1b47]">
-      
-      {/* 🏫 Nền phong cảnh trường mầm non màu tím pastel yên bình (Chỉ có trường, không có học sinh) */}
+    <div 
+      className="fixed inset-0 w-screen h-screen overflow-hidden select-none flex flex-col justify-center items-center p-4 bg-[#2d1b47] cursor-pointer"
+      onClick={() => {
+        if (needsInteraction && !hasFinishedRef.current) {
+          startBell();
+        }
+      }}
+    >
+      {/* 🏫 Nền phong cảnh trường mầm non màu tím pastel yên bình */}
       <img
         src={shinChanPlaygroundBg}
         alt="Toàn cảnh trường mầm non nhỏ màu tím pastel phong cách Shin-chan yên bình"
@@ -40,16 +95,16 @@ export const SchoolGate: React.FC<SchoolGateProps> = ({ onEnterSchool }) => {
 
       {/* 🌸 Hiệu ứng cánh hoa anh đào rơi nhẹ nhàng tự nhiên */}
       <div className="absolute inset-0 pointer-events-none">
-        {Array.from({ length: 12 }).map((_, i) => (
+        {Array.from({ length: 14 }).map((_, i) => (
           <div
             key={i}
             className="absolute text-pink-300/85 animate-sakura-fall"
             style={{
               top: `-10%`,
-              left: `${(i * 8.5) % 100}%`,
+              left: `${(i * 7.5) % 100}%`,
               fontSize: `${13 + (i % 3) * 5}px`,
-              animationDelay: `${i * 0.6}s`,
-              animationDuration: `${6 + (i % 4) * 2}s`,
+              animationDelay: `${i * 0.5}s`,
+              animationDuration: `${5 + (i % 4) * 2}s`,
             }}
           >
             🌸
@@ -57,25 +112,67 @@ export const SchoolGate: React.FC<SchoolGateProps> = ({ onEnterSchool }) => {
         ))}
       </div>
 
-      {/* 🔔 Khung Chuông Reo: Xuất hiện sau khi chuông kêu xong, kèm nút "Vào lớp thui" */}
+      {/* 🔔 1. Trạng thái Đang Rung Chuông (Chuẩn 6.0 giây) */}
+      {isRinging && !showBellFrame && (
+        <div className="relative z-20 flex flex-col items-center gap-3 animate-fade-in pointer-events-none">
+          <div className="w-24 h-24 rounded-full bg-white/95 backdrop-blur-md flex items-center justify-center shadow-[0_12px_32px_rgba(130,90,200,0.35)] border-3 border-purple-200">
+            <span className="text-5xl animate-bell-ring block">🔔</span>
+          </div>
+
+          <div className="bg-white/95 backdrop-blur-md px-5 py-2.5 rounded-full border border-purple-200 text-[#513c6b] font-black text-xs sm:text-sm shadow-md flex items-center gap-2.5">
+            <span className="animate-spin text-pink-500">✨</span>
+            <span>Đang reo chuông vào lớp... Reng reng reng~</span>
+            <div className="flex items-center gap-0.5 ml-1">
+              <span className="w-1 h-3 bg-purple-400 rounded-full animate-pulse"></span>
+              <span className="w-1 h-4 bg-pink-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></span>
+              <span className="w-1 h-2 bg-purple-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🔔 2. Trạng thái Chờ Người Dùng Chạm (Khi trình duyệt chặn Autoplay) */}
+      {needsInteraction && !isRinging && !showBellFrame && (
+        <div 
+          onClick={handleManualRing}
+          className="relative z-20 flex flex-col items-center gap-4 animate-bounce-in cursor-pointer max-w-xs text-center"
+        >
+          <div className="w-24 h-24 rounded-full bg-white/95 backdrop-blur-md flex items-center justify-center shadow-[0_16px_36px_rgba(130,90,200,0.4)] border-4 border-pink-200 hover:scale-110 active:scale-95 transition-all">
+            <span className="text-5xl animate-bounce block">🔔</span>
+          </div>
+
+          <div className="bg-white/95 backdrop-blur-md px-6 py-3.5 rounded-2xl border-2 border-purple-200 text-[#513c6b] shadow-lg space-y-1">
+            <div className="font-black text-base text-pink-600 flex items-center justify-center gap-1.5">
+              <span>🌸</span>
+              <span>Chạm để reo chuông</span>
+              <span>🌸</span>
+            </div>
+            <p className="text-xs text-purple-900 font-bold">
+              Chạm nhẹ bất kỳ đâu để bắt đầu nghe chuông vào lớp nhé!
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 🔔 3. Khung Thông Báo Vào Lớp: Hiện NGAY LẬP TỨC khi hết đúng 6.0s chuông */}
       {showBellFrame && (
         <div className="relative z-20 w-full max-w-sm mx-auto animate-bounce-in">
-          <div className="bg-white/92 backdrop-blur-md rounded-[2.5rem] p-6 sm:p-7 shadow-[0_16px_40px_rgba(130,90,200,0.35)] border-4 border-white/95 text-center space-y-4">
+          <div className="bg-white/95 backdrop-blur-md rounded-[2.5rem] p-6 sm:p-7 shadow-[0_16px_40px_rgba(130,90,200,0.35)] border-4 border-white text-center space-y-4">
             
-            {/* Quả chuông lắc lư báo giờ vào lớp */}
+            {/* Quả chuông báo giờ vào lớp */}
             <div className="relative w-20 h-20 mx-auto rounded-full bg-gradient-to-tr from-[#EDE4FF] via-[#FFE8F7] to-[#FFFBF5] flex items-center justify-center shadow-inner border-2 border-purple-200">
               <span className="text-4xl animate-bell-ring block select-none">🔔</span>
               <span className="absolute -top-1 -right-1 text-xl animate-pulse">✨</span>
               <span className="absolute -bottom-1 -left-1 text-sm animate-bounce">🎀</span>
             </div>
 
-            {/* Thông báo chuông reo */}
+            {/* Thông báo chuông reo xong */}
             <div className="space-y-1">
               <h2 className="text-xl sm:text-2xl font-black text-[#513c6b] tracking-tight">
                 Reng Reng Reng! 🌸
               </h2>
               <p className="text-xs sm:text-sm font-bold text-pink-600">
-                Chuông trường đã reo báo giờ vào lớp rồi nè!
+                Chuông trường đã reo hết rồi, mau vào lớp thui nè!
               </p>
             </div>
 
@@ -94,62 +191,17 @@ export const SchoolGate: React.FC<SchoolGateProps> = ({ onEnterSchool }) => {
                 </span>
               </button>
             </div>
-
           </div>
         </div>
       )}
 
-      {/* CSS Keyframe Animation cho chuông lắc và hiệu ứng */}
-      <style>{`
-        @keyframes bellRing {
-          0% { transform: rotate(0deg); }
-          15% { transform: rotate(18deg); }
-          30% { transform: rotate(-18deg); }
-          45% { transform: rotate(12deg); }
-          60% { transform: rotate(-12deg); }
-          75% { transform: rotate(6deg); }
-          90% { transform: rotate(-3deg); }
-          100% { transform: rotate(0deg); }
-        }
-        .animate-bell-ring {
-          animation: bellRing 1.8s ease-in-out infinite;
-          transform-origin: top center;
-        }
-
-        @keyframes bounceIn {
-          0% {
-            opacity: 0;
-            transform: scale(0.8) translateY(20px);
-          }
-          70% {
-            opacity: 1;
-            transform: scale(1.03) translateY(-4px);
-          }
-          100% {
-            opacity: 1;
-            transform: scale(1) translateY(0);
-          }
-        }
-        .animate-bounce-in {
-          animation: bounceIn 0.55s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-        }
-
-        @keyframes sakuraFall {
-          0% {
-            transform: translate3d(0, -10vh, 0) rotate(0deg);
-            opacity: 0;
-          }
-          15% { opacity: 0.85; }
-          85% { opacity: 0.85; }
-          100% {
-            transform: translate3d(100px, 110vh, 0) rotate(360deg);
-            opacity: 0;
-          }
-        }
-        .animate-sakura-fall {
-          animation: sakuraFall linear infinite;
-        }
-      `}</style>
+      {/* 🏷️ Tên trường học ở góc trên */}
+      <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-white/90 backdrop-blur-md px-4 py-2 rounded-full border border-purple-200 shadow-sm pointer-events-none">
+        <span className="text-lg">🏫</span>
+        <span className="text-xs sm:text-sm font-black text-[#513c6b]">
+          Trường Mầm Non Rắn Con 🌸
+        </span>
+      </div>
     </div>
   );
 };

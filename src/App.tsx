@@ -27,10 +27,8 @@ import { Mail, Dices } from 'lucide-react';
 import { soundManager } from './lib/audio';
 
 export default function App() {
-  // Gate / Inside state
-  const [inClassroom, setInClassroom] = useState<boolean>(() => {
-    return sessionStorage.getItem('enteredSchool') === 'true';
-  });
+  // Gate / Inside state: luôn mở ở cổng trường để chuông tự kêu khi vừa vào web
+  const [inClassroom, setInClassroom] = useState<boolean>(false);
 
   // Active Main Navigation Tab (Mục riêng biệt)
   const [activeTab, setActiveTab] = useState<MainTabType>('classroom');
@@ -95,6 +93,7 @@ export default function App() {
   const handleReturnToGate = () => {
     soundManager.playPop();
     setInClassroom(false);
+    setMusicTrigger(false);
     sessionStorage.removeItem('enteredSchool');
   };
 
@@ -163,7 +162,7 @@ export default function App() {
 
   return (
     <MusicProvider 
-      autoPlayTrigger={musicTrigger} 
+      autoPlayTrigger={inClassroom && musicTrigger} 
       isAdmin={isAdmin}
       isPausedByModal={!!(activeDetailChar?.youtubeMusicUrl)}
     >
