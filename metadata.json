@@ -1,0 +1,6 @@
+{
+  "name": "Mầm Non Rắn Con",
+  "description": "Nhà Trẻ Rắn Con! Nơi những bé rắn nhỏ xíu học tập, quậy phá và cùng nhau lớn lên.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

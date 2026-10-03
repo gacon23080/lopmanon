@@ -1,0 +1,27 @@
+{
+  "collections": {
+    "characters": {
+      "fields": {
+        "name": "string",
+        "bio": "string",
+        "plot": "string",
+        "link": "string",
+        "tags": "array",
+        "createdAt": "timestamp"
+      }
+    },
+    "feedbacks": {
+      "fields": {
+        "characterId": "string",
+        "content": "string",
+        "timestamp": "timestamp"
+      }
+    },
+    "appStats": {
+      "fields": {
+        "patCount": "number",
+        "studentCount": "number"
+      }
+    }
+  }
+}
