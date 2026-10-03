@@ -22,7 +22,8 @@ export const Header: React.FC<HeaderProps> = ({
   onAdminClick,
   onGateClick,
 }) => {
-  const { isPlaying, musicConfig, toggleMusic, openEditModal } = useMusic();
+  const { isPlaying, isCharPlaying, musicConfig, toggleMusic, openEditModal } = useMusic();
+  const isAnyMusicActive = isPlaying || isCharPlaying;
 
   return (
     <header className="fixed top-0 w-full z-50 glass-card border-b border-white/60 shadow-md backdrop-blur-xl transition-all duration-300">
@@ -123,20 +124,20 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={toggleMusic}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold shadow-xs border transition-all cursor-pointer hover:scale-105 active:scale-95 ${
-              isPlaying 
-                ? 'bg-[#FFE8F7] border-pink-300 text-pink-700 font-extrabold shadow-pink-100/50 animate-pulse' 
-                : 'bg-white/80 border-purple-100 text-purple-900 hover:bg-[#EDE4FF]'
+              isAnyMusicActive 
+                ? 'bg-[#FFE8F7] border-pink-200 text-[#b85b88] font-bold shadow-pink-100/50' 
+                : 'bg-white/80 border-purple-100 text-[#644973] hover:bg-[#EDE4FF]'
             }`}
-            title={isPlaying ? `Tắt nhạc nền (${musicConfig.title})` : `Bật nhạc nền (${musicConfig.title})`}
+            title={isAnyMusicActive ? `Bấm để tắt nhạc ngay (${musicConfig.title})` : `Bấm để bật nhạc nền (${musicConfig.title})`}
           >
-            <span className={isPlaying ? 'animate-bounce' : ''}>🎵</span>
+            <span className={isAnyMusicActive ? 'animate-bounce' : ''}>{isAnyMusicActive ? '🎵' : '🔇'}</span>
             <span className="hidden sm:inline max-w-[110px] truncate">
-              {isPlaying ? 'Nhạc nền 🎶' : 'Bật nhạc'}
+              {isAnyMusicActive ? 'Tắt nhạc 🎶' : 'Bật nhạc'}
             </span>
-            {isPlaying && (
+            {isAnyMusicActive && (
               <span className="flex items-center gap-0.5 ml-0.5 h-3">
-                <span className="w-0.5 h-2 bg-pink-500 rounded-full animate-pulse"></span>
-                <span className="w-0.5 h-3 bg-pink-600 rounded-full animate-pulse"></span>
+                <span className="w-0.5 h-2 bg-pink-400 rounded-full animate-pulse"></span>
+                <span className="w-0.5 h-3 bg-pink-500 rounded-full animate-pulse"></span>
                 <span className="w-0.5 h-1.5 bg-pink-400 rounded-full animate-pulse"></span>
               </span>
             )}

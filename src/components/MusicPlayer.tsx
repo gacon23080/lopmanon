@@ -14,6 +14,7 @@ interface MusicContextType {
   openEditModal: () => void;
   setCharPlaying: (playing: boolean) => void;
   isCharPlaying: boolean;
+  stopCharMusicSignal: number;
 }
 
 const MusicContext = createContext<MusicContextType | null>(null);
@@ -41,6 +42,8 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isCharPlaying, setIsCharPlaying] = useState(false);
+  const [stopCharMusicSignal, setStopCharMusicSignal] = useState(0);
+  const [hasBeenStoppedOnce, setHasBeenStoppedOnce] = useState(false);
   const [musicConfig, setMusicConfig] = useState<SchoolMusicConfig>(DEFAULT_SCHOOL_MUSIC);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editUrl, setEditUrl] = useState('');
@@ -48,6 +51,13 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
   const [isSaving, setIsSaving] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const hasAutoPlayedRef = useRef(false);
+  const playTimersRef = useRef<number[]>([]);
+
+  const clearPlayTimers = useCallback(() => {
+    playTimersRef.current.forEach((id) => window.clearTimeout(id));
+    playTimersRef.current = [];
+  }, []);
 
   // Load saved school background music from Firestore / localStorage
   useEffect(() => {
@@ -86,61 +96,80 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
 
   // Phát nhạc ngay tức thì
   const playMusic = useCallback(() => {
+    clearPlayTimers();
     setIsPlaying(true);
     if (!isCharPlaying && !isPausedByModal) {
       sendCommand("unMute", []);
       sendCommand("setVolume", [100]);
       sendCommand("playVideo", []);
 
-      setTimeout(() => {
+      const t1 = window.setTimeout(() => {
         sendCommand("unMute", []);
         sendCommand("setVolume", [100]);
         sendCommand("playVideo", []);
-      }, 100);
+      }, 120);
 
-      setTimeout(() => {
+      const t2 = window.setTimeout(() => {
         sendCommand("unMute", []);
+        sendCommand("setVolume", [100]);
         sendCommand("playVideo", []);
-      }, 350);
+      }, 380);
+
+      playTimersRef.current = [t1, t2];
     }
-  }, [isCharPlaying, isPausedByModal, sendCommand]);
+  }, [clearPlayTimers, isCharPlaying, isPausedByModal, sendCommand]);
 
-  // Tạm dừng nhạc
+  // Tắt / tạm dừng nhạc nền hoàn toàn (gỡ iframe + gửi lệnh pause)
   const pauseMusic = useCallback(() => {
+    clearPlayTimers();
     setIsPlaying(false);
+    setHasBeenStoppedOnce(true);
     sendCommand("pauseVideo", []);
-  }, [sendCommand]);
+    sendCommand("stopVideo", []);
+    sendCommand("mute", []);
+  }, [clearPlayTimers, sendCommand]);
 
-  // Chuyển đổi trạng thái Bật / Tắt
+  // Chuyển đổi trạng thái Bật / Tắt (Nếu nhạc nhân vật đang kêu thì tắt luôn cả nhạc nhân vật!)
   const toggleMusic = useCallback(() => {
     soundManager.playPop();
+    if (isCharPlaying) {
+      // Nếu nhạc nhân vật đang phát -> bấm nút tắt nhạc sẽ tắt ngay nhạc nhân vật & giữ im lặng
+      setStopCharMusicSignal((prev) => prev + 1);
+      setIsCharPlaying(false);
+      pauseMusic();
+      return;
+    }
     if (isPlaying) {
       pauseMusic();
     } else {
       playMusic();
     }
-  }, [isPlaying, playMusic, pauseMusic]);
+  }, [isCharPlaying, isPlaying, playMusic, pauseMusic]);
 
-  // Tự động phát khi bấm "Vào lớp thui"
+  // Chỉ tự động phát ĐÚNG 1 LẦN khi bấm "Vào lớp thui" (autoPlayTrigger chuyển sang true)
   useEffect(() => {
-    if (autoPlayTrigger && !isPausedByModal && !isCharPlaying) {
+    if (autoPlayTrigger && !hasAutoPlayedRef.current) {
+      hasAutoPlayedRef.current = true;
       playMusic();
-    } else if (!autoPlayTrigger && isPlaying) {
+    } else if (!autoPlayTrigger && hasAutoPlayedRef.current) {
+      hasAutoPlayedRef.current = false;
       pauseMusic();
     }
-  }, [autoPlayTrigger, isPausedByModal, isCharPlaying, playMusic, pauseMusic, isPlaying]);
+  }, [autoPlayTrigger, playMusic, pauseMusic]);
 
-  // Khi nhạc của nhân vật (char) bật -> Nhạc nền tự động tắt/tạm dừng ngay lập tức
-  // Khi nhạc của nhân vật tắt/đóng -> Nhạc nền tự động tiếp tục phát
+  // Khi nhạc của nhân vật (char) bật hoặc modal video mở -> Đánh dấu đã dừng để gỡ iframe nền ngay lập tức
   useEffect(() => {
     if (isCharPlaying || isPausedByModal) {
+      clearPlayTimers();
+      setHasBeenStoppedOnce(true);
       sendCommand("pauseVideo", []);
+      sendCommand("mute", []);
     } else if (isPlaying && autoPlayTrigger) {
       sendCommand("unMute", []);
       sendCommand("setVolume", [100]);
       sendCommand("playVideo", []);
     }
-  }, [isCharPlaying, isPausedByModal, isPlaying, autoPlayTrigger, sendCommand]);
+  }, [isCharPlaying, isPausedByModal, isPlaying, autoPlayTrigger, clearPlayTimers, sendCommand]);
 
   const setCharPlaying = useCallback((playing: boolean) => {
     setIsCharPlaying(playing);
@@ -162,18 +191,27 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
       soundManager.playSparkle();
       
       // Tự động phát bài hát mới vừa đổi
+      setHasBeenStoppedOnce(true);
       setIsPlaying(true);
-      setTimeout(() => {
-        sendCommand("unMute", []);
-        sendCommand("setVolume", [100]);
-        sendCommand("playVideo", []);
-      }, 300);
     } catch (e) {
       console.error("Failed to save school music:", e);
     } finally {
       setIsSaving(false);
     }
   };
+
+  // Logic hiển thị Iframe Nhạc Nền:
+  // 1. Khi còn ở cổng trường (!autoPlayTrigger): Nạp sẵn ngầm (Pre-warm) với autoplay=0
+  // 2. Khi đã vào lớp (autoPlayTrigger === true):
+  //    - Chỉ giữ iframe khi (isPlaying && !isCharPlaying && !isPausedByModal)
+  //    - Ngay khi người dùng bấm "Tắt nhạc" (!isPlaying) hoặc nhạc nhân vật bật (isCharPlaying):
+  //      Gỡ hoàn toàn iframe khỏi DOM -> Nhạc tắt NGAY LẬP TỨC 100% không thể kêu thêm dù chỉ 1 giây!
+  const shouldRenderBgIframe = Boolean(videoId) && (
+    !autoPlayTrigger || (isPlaying && !isCharPlaying && !isPausedByModal)
+  );
+
+  // Nếu đã từng tắt hoặc tạm dừng rồi bật lại trong lớp -> dùng autoplay=1 để phát ngay khi mount lại
+  const iframeAutoplayParam = (autoPlayTrigger && hasBeenStoppedOnce) ? 1 : 0;
 
   return (
     <MusicContext.Provider value={{
@@ -184,14 +222,10 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
       pauseMusic,
       openEditModal: () => setShowEditModal(true),
       setCharPlaying,
-      isCharPlaying
+      isCharPlaying,
+      stopCharMusicSignal
     }}>
-      {/* 
-        Single Stable Pre-Warmed YouTube Audio Player Iframe:
-        - Luôn được nạp sẵn ngầm (Pre-warmed) ở chế độ autoplay=0
-        - Khi bấm "Vào lớp thui ✨": Nhạc phát NGAY LẬP TỨC 0ms vì iframe đã tải sẵn tài nguyên!
-      */}
-      {videoId && (
+      {shouldRenderBgIframe && (
         <div 
           aria-hidden="true"
           style={{
@@ -210,9 +244,16 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
             ref={iframeRef}
             width="240"
             height="160"
-            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=0&controls=0&loop=1&playlist=${videoId}&playsinline=1`}
+            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=${iframeAutoplayParam}&controls=0&loop=1&playlist=${videoId}&playsinline=1`}
             title={musicConfig.title}
             allow="autoplay; encrypted-media; picture-in-picture"
+            onLoad={() => {
+              if (autoPlayTrigger && isPlaying && !isCharPlaying && !isPausedByModal) {
+                sendCommand("unMute", []);
+                sendCommand("setVolume", [100]);
+                sendCommand("playVideo", []);
+              }
+            }}
           />
         </div>
       )}
@@ -226,7 +267,7 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
             className="fixed inset-0 bg-black/65 backdrop-blur-md animate-fade-in" 
             onClick={() => setShowEditModal(false)} 
           />
-          <div className="bg-[#FFFBF5] rounded-3xl p-6 sm:p-7 max-w-md w-full relative z-10 shadow-2xl border-3 border-purple-100 space-y-4 animate-in zoom-in-95 my-auto">
+          <div className="bg-[#FFFBF5] rounded-3xl p-6 sm:p-7 max-w-md w-full relative z-10 shadow-2xl border border-purple-100 space-y-4 animate-in zoom-in-95 my-auto">
             <button
               onClick={() => setShowEditModal(false)}
               className="absolute top-4 right-4 p-2 rounded-full bg-white text-gray-400 hover:text-gray-600 border border-purple-100 cursor-pointer shadow-2xs"
@@ -308,22 +349,25 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
         <div className="fixed bottom-3 right-3 sm:bottom-4 sm:right-4 z-40 flex items-center gap-1.5 bg-white/95 backdrop-blur-md px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-full border border-purple-100 shadow-md animate-fade-in text-xs">
           <button
             onClick={toggleMusic}
-            title={isPlaying ? (isCharPlaying ? "Đang nhường tiếng cho nhạc nhân vật" : "Tạm dừng nhạc") : "Bật nhạc nền"}
-            className={`p-1.5 rounded-full transition-all cursor-pointer flex items-center justify-center ${
-              isPlaying && !isCharPlaying
-                ? 'bg-pink-100 text-pink-500 hover:bg-pink-200 animate-pulse' 
-                : 'bg-purple-50 text-purple-400 hover:bg-purple-100'
+            title={(isPlaying || isCharPlaying) ? "Bấm để tắt nhạc ngay" : "Bấm để bật nhạc nền"}
+            className={`px-2.5 py-1 rounded-full transition-all cursor-pointer flex items-center gap-1.5 font-semibold ${
+              (isPlaying || isCharPlaying)
+                ? 'bg-pink-100 text-[#b85b88] hover:bg-pink-200' 
+                : 'bg-purple-50 text-[#7a5d84] hover:bg-purple-100'
             }`}
           >
-            {isPlaying && !isCharPlaying ? <Volume2 size={16} /> : <VolumeX size={16} />}
+            {(isPlaying || isCharPlaying) ? <Volume2 size={15} className="animate-pulse" /> : <VolumeX size={15} />}
+            <span className="text-[11px]">
+              {(isPlaying || isCharPlaying) ? 'Tắt nhạc' : 'Bật nhạc'}
+            </span>
           </button>
 
-          <div className="flex items-center gap-1.5 max-w-[120px] sm:max-w-[180px] overflow-hidden">
-            <span className="text-[#644973] font-semibold truncate text-[11px] sm:text-xs">
-              {isCharPlaying ? '🎵 Nhạc nhân vật đang phát' : musicConfig.title}
+          <div className="hidden xs:flex items-center gap-1.5 max-w-[120px] sm:max-w-[160px] overflow-hidden pr-1">
+            <span className="text-[#644973] font-medium truncate text-[11px]">
+              {isCharPlaying ? '🎵 Nhạc của bé' : (isPlaying ? musicConfig.title : 'Đã tắt nhạc')}
             </span>
-            {isPlaying && !isCharPlaying && (
-              <span className="flex gap-0.5 items-center">
+            {(isPlaying || isCharPlaying) && (
+              <span className="flex gap-0.5 items-center shrink-0">
                 <span className="w-1 h-2 bg-pink-400 rounded-full animate-pulse"></span>
                 <span className="w-1 h-3.5 bg-purple-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></span>
                 <span className="w-1 h-2 bg-pink-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></span>

@@ -20,7 +20,7 @@ export const RandomHusbandSection: React.FC<RandomHusbandSectionProps> = ({
   onSendFeedbackToChar,
   onGoToClassroom,
 }) => {
-  const { setCharPlaying } = useMusic();
+  const { setCharPlaying, pauseMusic, stopCharMusicSignal } = useMusic();
   const [selectedTag, setSelectedTag] = useState<string>('all');
   const [selectedHusband, setSelectedHusband] = useState<Character | null>(null);
   const [isRolling, setIsRolling] = useState(false);
@@ -32,7 +32,7 @@ export const RandomHusbandSection: React.FC<RandomHusbandSectionProps> = ({
 
   // Khi nhạc nhân vật trong phần bốc thăm phát -> Tự động dừng nhạc nền lớp học
   useEffect(() => {
-    if (youtubeId && isPlayingMusic) {
+    if (youtubeId && isPlayingMusic && !isRolling) {
       setCharPlaying(true);
     } else {
       setCharPlaying(false);
@@ -40,7 +40,15 @@ export const RandomHusbandSection: React.FC<RandomHusbandSectionProps> = ({
     return () => {
       setCharPlaying(false);
     };
-  }, [youtubeId, isPlayingMusic, setCharPlaying]);
+  }, [youtubeId, isPlayingMusic, isRolling, setCharPlaying]);
+
+  // Lắng nghe tín hiệu tắt nhạc từ thanh Header / Floating Bar
+  useEffect(() => {
+    if (stopCharMusicSignal > 0) {
+      setIsPlayingMusic(false);
+      setCharPlaying(false);
+    }
+  }, [stopCharMusicSignal, setCharPlaying]);
 
   // Filter pool
   const candidatePool = characters.filter(c => {
@@ -77,15 +85,32 @@ export const RandomHusbandSection: React.FC<RandomHusbandSectionProps> = ({
     }, 100);
   };
 
+  const sendIframeCommand = (func: string, args: any[] = []) => {
+    try {
+      if (iframeRef.current && iframeRef.current.contentWindow) {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({
+            event: "command",
+            func: func,
+            args: args
+          }),
+          "*"
+        );
+      }
+    } catch (e) {
+      console.warn("Error sending command to husband music iframe:", e);
+    }
+  };
+
   const toggleMusic = () => {
-    if (iframeRef.current) {
-      const nextState = !isPlayingMusic;
-      const message = nextState
-        ? '{"event":"command","func":"playVideo","args":""}'
-        : '{"event":"command","func":"pauseVideo","args":""}';
-      iframeRef.current.contentWindow?.postMessage(message, '*');
-      setIsPlayingMusic(nextState);
-      setCharPlaying(nextState && !!youtubeId);
+    soundManager.playPop();
+    const nextState = !isPlayingMusic;
+    setIsPlayingMusic(nextState);
+    setCharPlaying(nextState && !!youtubeId);
+
+    if (!nextState) {
+      // Khi chủ động bấm tắt nhạc bé -> giữ yên tĩnh hoàn toàn, không tự bật nhạc nền đè lên
+      pauseMusic();
     }
   };
 
@@ -96,7 +121,7 @@ export const RandomHusbandSection: React.FC<RandomHusbandSectionProps> = ({
     <div className="space-y-8 animate-in fade-in duration-300">
       
       {/* In-App YouTube Audio */}
-      {youtubeId && isPlayingMusic && (
+      {youtubeId && isPlayingMusic && !isRolling && (
         <div 
           aria-hidden="true"
           style={{

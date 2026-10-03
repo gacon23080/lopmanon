@@ -21,45 +21,44 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
   isAdmin = false,
   onEditCharacter,
 }) => {
-  const { setCharPlaying } = useMusic();
+  const { isPlaying: isSchoolMusicPlaying, toggleMusic: toggleSchoolMusic, setCharPlaying, stopCharMusicSignal } = useMusic();
   const [isPlayingMusic, setIsPlayingMusic] = useState(true);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const youtubeId = extractYouTubeId(character.youtubeMusicUrl);
 
-  // Khi nhạc của nhân vật bật -> Tự động dừng nhạc nền lớp học
+  // Khi mở hồ sơ nhân vật có nhạc riêng -> tạm dừng nhạc nền trường học trong suốt lúc mở modal
+  // Khi đóng modal -> trả lại trạng thái để nhạc nền trường học tự phát tiếp (nếu đang bật)
   useEffect(() => {
-    if (youtubeId && isPlayingMusic) {
+    if (youtubeId) {
       setCharPlaying(true);
-    } else {
-      setCharPlaying(false);
     }
-
     return () => {
       setCharPlaying(false);
     };
-  }, [youtubeId, isPlayingMusic, setCharPlaying]);
+  }, [youtubeId, setCharPlaying]);
 
-  const toggleMusic = () => {
-    if (iframeRef.current) {
-      const nextState = !isPlayingMusic;
-      const message = nextState
-        ? '{"event":"command","func":"playVideo","args":""}'
-        : '{"event":"command","func":"pauseVideo","args":""}';
-      iframeRef.current.contentWindow?.postMessage(message, '*');
-      setIsPlayingMusic(nextState);
-      setCharPlaying(nextState && !!youtubeId);
-      soundManager.playPop();
+  // Nếu người dùng bấm nút tắt nhạc chung từ thanh điều khiển -> tắt luôn nhạc nhân vật
+  useEffect(() => {
+    if (stopCharMusicSignal > 0) {
+      setIsPlayingMusic(false);
     }
+  }, [stopCharMusicSignal]);
+
+  const toggleCharacterMusic = () => {
+    soundManager.playPop();
+    const nextState = !isPlayingMusic;
+    setIsPlayingMusic(nextState);
+  };
+
+  // Safe close: ngắt hoàn toàn bài hát của nhân vật trước khi đóng
+  const handleClose = () => {
+    setIsPlayingMusic(false);
+    setCharPlaying(false);
+    onClose();
   };
 
   useEffect(() => {
     soundManager.playSparkle();
-    const timer = setTimeout(() => {
-      if (iframeRef.current) {
-        iframeRef.current.contentWindow?.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
-      }
-    }, 500);
-    return () => clearTimeout(timer);
   }, [youtubeId]);
 
   const linkTarget = character.linkUrl || character.googleAiLink;
@@ -73,10 +72,11 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
       {/* Backdrop tối mờ che phủ TOÀN BỘ màn hình */}
       <div 
         className="fixed inset-0 bg-black/60 backdrop-blur-md" 
-        onClick={onClose} 
+        onClick={handleClose} 
       />
 
-      {/* Embedded In-App YouTube Audio Player for Character Theme */}
+      {/* Embedded In-App YouTube Audio Player for Character Theme:
+          Chỉ mount khi isPlayingMusic === true. Khi bấm Tắt nhạc -> gỡ hoàn toàn khỏi DOM, tắt tiếng 100% tức thì! */}
       {youtubeId && isPlayingMusic && (
         <div 
           aria-hidden="true"
@@ -103,7 +103,7 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
       )}
 
       {/* Main Modal Card */}
-      <div className="bg-[#FFFDF9] rounded-3xl p-3.5 sm:p-5 w-full max-w-lg md:max-w-xl my-auto relative z-10 shadow-2xl border-2 border-purple-100 max-h-[82vh] flex flex-col animate-in zoom-in-95">
+      <div className="bg-[#FFFDF9] rounded-3xl p-3.5 sm:p-5 w-full max-w-lg md:max-w-xl my-auto relative z-10 shadow-2xl border border-purple-100 max-h-[82vh] flex flex-col animate-in zoom-in-95">
         
         {/* TOP HEADER PINNED */}
         <div className="shrink-0 flex items-center justify-between gap-2 border-b border-purple-100/70 pb-2.5 mb-2.5">
@@ -127,25 +127,38 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5">
-            {/* Quick in-app music toggle in header if available */}
-            {youtubeId && (
+            {/* Nút Bật / Tắt nhạc ngay trên thanh tiêu đề Modal */}
+            {youtubeId ? (
               <button
-                onClick={toggleMusic}
-                className={`px-2.5 py-1 rounded-full text-[10px] font-semibold transition-all shadow-2xs border cursor-pointer flex items-center gap-1 ${
+                onClick={toggleCharacterMusic}
+                className={`px-2.5 py-1.5 rounded-full text-[11px] font-semibold transition-all shadow-2xs border cursor-pointer flex items-center gap-1 ${
                   isPlayingMusic 
-                    ? 'bg-pink-50 border-pink-200 text-[#b85b88] animate-pulse' 
-                    : 'bg-purple-50/50 border-purple-100 text-[#8a7294]'
+                    ? 'bg-pink-50 border-pink-200 text-[#b85b88] hover:bg-pink-100' 
+                    : 'bg-purple-50/70 border-purple-100 text-[#8a7294] hover:bg-purple-100/60'
                 }`}
-                title="Bật/Tắt nhạc nền của bé (nhạc nền trường sẽ tạm nhường tiếng)"
+                title={isPlayingMusic ? "Bấm để tắt nhạc của bé ngay lập tức" : "Bấm để bật lại nhạc của bé"}
               >
-                {isPlayingMusic ? <Volume2 size={12} /> : <VolumeX size={12} />}
-                <span className="hidden xs:inline">{isPlayingMusic ? 'Nhạc bé 🎵' : 'Tắt'}</span>
+                {isPlayingMusic ? <Volume2 size={13} className="animate-pulse" /> : <VolumeX size={13} />}
+                <span>{isPlayingMusic ? 'Tắt nhạc bé 🎵' : 'Bật nhạc bé'}</span>
+              </button>
+            ) : (
+              <button
+                onClick={toggleSchoolMusic}
+                className={`px-2.5 py-1.5 rounded-full text-[11px] font-semibold transition-all shadow-2xs border cursor-pointer flex items-center gap-1 ${
+                  isSchoolMusicPlaying 
+                    ? 'bg-pink-50 border-pink-200 text-[#b85b88] hover:bg-pink-100' 
+                    : 'bg-purple-50/70 border-purple-100 text-[#8a7294] hover:bg-purple-100/60'
+                }`}
+                title={isSchoolMusicPlaying ? "Bấm để tắt nhạc nền" : "Bấm để bật nhạc nền"}
+              >
+                {isSchoolMusicPlaying ? <Volume2 size={13} className="animate-pulse" /> : <VolumeX size={13} />}
+                <span>{isSchoolMusicPlaying ? 'Tắt nhạc 🎵' : 'Bật nhạc'}</span>
               </button>
             )}
 
             {/* Close Button */}
             <button 
-              onClick={onClose} 
+              onClick={handleClose} 
               className="text-[#9e83a6] hover:text-[#5e4373] bg-white hover:bg-purple-50 rounded-full p-1.5 shadow-2xs border border-purple-100 cursor-pointer transition-transform hover:scale-105"
               title="Đóng hồ sơ"
             >
@@ -158,7 +171,7 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
         <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-2.5">
           <div className="grid grid-cols-12 gap-3 items-start">
             
-            {/* Ảnh đại diện dọc nhỏ gọn */}
+            {/* Ảnh đại diện dọc */}
             <div className="col-span-4 flex flex-col items-center">
               <div className="w-full aspect-[3/4] max-h-36 sm:max-h-40 rounded-xl overflow-hidden bg-gradient-to-tr from-[#F4ECFF] to-[#FFEBF8] border border-purple-100 shadow-2xs relative flex items-center justify-center">
                 {character.imageUrl ? (
@@ -170,28 +183,28 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
                 ) : (
                   <div className="text-center p-2 text-purple-300">
                     <span className="text-3xl block">🐍</span>
-                    <span className="text-[9px] font-semibold text-[#7e608a]">Bé Rắn</span>
+                    <span className="text-[9px] font-semibold text-[#8b6b96]">Bé Rắn</span>
                   </div>
                 )}
 
                 {character.is18Plus && (
-                  <div className="absolute top-1.5 right-1.5 bg-red-400 text-white text-[8px] font-bold px-1.5 py-0.2 rounded-full shadow-2xs">
-                    18+
+                  <div className="absolute top-1.5 right-1.5 bg-red-400/95 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full shadow-2xs flex items-center gap-0.5">
+                    <ShieldAlert size={9} /> 18+
                   </div>
                 )}
               </div>
 
-              {/* Tags */}
+              {/* Tags dưới ảnh */}
               <div className="flex flex-wrap gap-1 justify-center mt-1.5 w-full">
-                {(character.tags || []).slice(0, 4).map((t) => {
+                {(character.tags || []).map(t => {
                   const is18 = ['18+', 'r18', 'h+', 'nsfw', '+18'].includes(t.toLowerCase());
                   return (
                     <span 
                       key={t} 
                       className={`text-[9px] font-medium px-1.5 py-0.2 rounded-full border ${
                         is18 
-                          ? 'bg-red-50 text-red-600 border-red-150' 
-                          : 'bg-[#F4ECFF] text-[#6d4d7a] border-purple-100'
+                          ? 'bg-red-50 text-red-600 border-red-200' 
+                          : 'bg-[#F5EDFF] text-[#6d4d7a] border-purple-100'
                       }`}
                     >
                       {is18 ? `🔞 ${t}` : t}
@@ -201,129 +214,130 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
               </div>
             </div>
 
-            {/* 4 Chỉ Số: Tuổi, Ngày Sinh, Thích, Ghét */}
-            <div className="col-span-8 space-y-1.5">
-              <div className="grid grid-cols-2 gap-1.5">
-                {/* Tuổi */}
-                <div className="bg-white rounded-xl p-2 border border-purple-100/70 shadow-2xs">
-                  <div className="text-[10px] font-semibold text-[#8b609e] flex items-center gap-1">
-                    <Cake size={11} className="text-pink-400" /> Tuổi
-                  </div>
-                  <div className="text-xs font-semibold text-[#5e4373] truncate mt-0.5">
-                    {character.age || 'Đang cập nhật'}
-                  </div>
+            {/* 4 Thông số: Tuổi, Ngày sinh, Thích, Ghét */}
+            <div className="col-span-8 grid grid-cols-2 gap-1.5">
+              {/* Tuổi */}
+              <div className="bg-white rounded-xl p-2 border border-purple-100/70 shadow-2xs">
+                <div className="text-[9px] font-semibold text-[#8b609e] flex items-center gap-1">
+                  <Cake size={11} className="text-pink-400" /> Tuổi
                 </div>
-
-                {/* Ngày sinh */}
-                <div className="bg-white rounded-xl p-2 border border-purple-100/70 shadow-2xs">
-                  <div className="text-[10px] font-semibold text-[#8b609e] flex items-center gap-1">
-                    <Calendar size={11} className="text-blue-400" /> Ngày sinh
-                  </div>
-                  <div className="text-xs font-semibold text-[#5e4373] truncate mt-0.5">
-                    {character.birthday || 'Đang cập nhật'}
-                  </div>
-                </div>
-
-                {/* Thích */}
-                <div className="bg-white rounded-xl p-2 border border-purple-100/70 shadow-2xs">
-                  <div className="text-[10px] font-semibold text-[#b85b88] flex items-center gap-1">
-                    <Heart size={11} className="text-pink-400 fill-pink-400" /> Thích
-                  </div>
-                  <div className="text-[11px] font-medium text-[#644973] truncate mt-0.5" title={character.likes}>
-                    {character.likes || 'Đang cập nhật'}
-                  </div>
-                </div>
-
-                {/* Ghét */}
-                <div className="bg-white rounded-xl p-2 border border-purple-100/70 shadow-2xs">
-                  <div className="text-[10px] font-semibold text-rose-500 flex items-center gap-1">
-                    <HeartCrack size={11} className="text-rose-400" /> Ghét
-                  </div>
-                  <div className="text-[11px] font-medium text-[#644973] truncate mt-0.5" title={character.dislikes}>
-                    {character.dislikes || 'Đang cập nhật'}
-                  </div>
+                <div className="text-xs font-semibold text-[#5e4373] truncate mt-0.5">
+                  {character.age || 'Đang cập nhật'}
                 </div>
               </div>
+
+              {/* Ngày sinh */}
+              <div className="bg-white rounded-xl p-2 border border-purple-100/70 shadow-2xs">
+                <div className="text-[9px] font-semibold text-[#8b609e] flex items-center gap-1">
+                  <Calendar size={11} className="text-blue-400" /> Ngày sinh
+                </div>
+                <div className="text-xs font-semibold text-[#5e4373] truncate mt-0.5">
+                  {character.birthday || 'Đang cập nhật'}
+                </div>
+              </div>
+
+              {/* Sở thích */}
+              <div className="bg-white rounded-xl p-2 border border-purple-100/70 shadow-2xs col-span-2 sm:col-span-1">
+                <div className="text-[9px] font-semibold text-[#b85b88] flex items-center gap-1">
+                  <Heart size={11} className="text-pink-400 fill-pink-400" /> Thích
+                </div>
+                <div className="text-[11px] font-medium text-[#644973] line-clamp-2 mt-0.5 leading-snug">
+                  {character.likes || 'Đang cập nhật'}
+                </div>
+              </div>
+
+              {/* Điều ghét */}
+              <div className="bg-white rounded-xl p-2 border border-purple-100/70 shadow-2xs col-span-2 sm:col-span-1">
+                <div className="text-[9px] font-semibold text-rose-500 flex items-center gap-1">
+                  <HeartCrack size={11} className="text-rose-400" /> Ghét
+                </div>
+                <div className="text-[11px] font-medium text-[#644973] line-clamp-2 mt-0.5 leading-snug">
+                  {character.dislikes || 'Đang cập nhật'}
+                </div>
+              </div>
+
+              {/* Giới thiệu ngắn */}
+              {character.bio && (
+                <div className="col-span-2 bg-purple-50/40 rounded-xl p-2 border border-purple-100/60">
+                  <p className="text-[11px] text-[#6d4d7a] italic line-clamp-2 leading-relaxed font-normal">
+                    "{character.bio}"
+                  </p>
+                </div>
+              )}
             </div>
 
           </div>
 
-          {/* Story / Cốt truyện chi tiết */}
-          <div className="bg-white rounded-2xl p-3.5 sm:p-4 border border-purple-100/80 shadow-2xs space-y-2">
-            <div className="flex items-center justify-between border-b border-purple-50 pb-1.5">
+          {/* Cốt truyện (Story / Plot) */}
+          <div className="bg-white rounded-2xl p-3 border border-purple-100/80 shadow-2xs space-y-1.5">
+            <div className="flex items-center justify-between border-b border-purple-50 pb-1">
               <h3 className="text-xs font-bold text-[#6d4d7a] flex items-center gap-1.5 uppercase tracking-wide">
-                <BookOpen size={14} className="text-[#8b609e]" /> Story / Cốt Truyện Bé Rắn
+                <BookOpen size={13} className="text-[#8b609e]" /> Cốt Truyện & Hồ Sơ Chi Tiết
               </h3>
-              <span className="text-[10px] font-semibold text-[#b85b88] bg-pink-50 px-2 py-0.5 rounded-full">
-                🌸 Cốt truyện
-              </span>
+              {youtubeId && (
+                <span className="text-[9px] text-[#b85b88] font-medium flex items-center gap-1">
+                  {isPlayingMusic ? '🎵 Đang phát nhạc riêng của bé' : '🔇 Đã tắt nhạc bé'}
+                </span>
+              )}
             </div>
-            <div className="text-xs sm:text-[13px] text-[#5e496a] leading-relaxed font-normal whitespace-pre-wrap min-h-[140px] max-h-[280px] sm:max-h-[340px] overflow-y-auto pr-1.5 space-y-2 selection:bg-pink-100">
+            <div className="text-xs text-[#5e496a] leading-relaxed max-h-36 sm:max-h-44 overflow-y-auto pr-1 whitespace-pre-wrap font-normal">
               {storyText ? (
-                <div className="space-y-2">
-                  {storyText}
-                </div>
+                storyText
               ) : (
-                <p className="text-[#9e83a6] italic text-center py-6">
-                  Bé rắn này chưa có cốt truyện chi tiết. Hãy liên hệ Admin để cập nhật nhé! ✨
-                </p>
+                <p className="text-[#9e83a6] italic">Bé rắn này chưa có cốt truyện chi tiết. Cô giáo sẽ sớm cập nhật thêm nhé!</p>
               )}
             </div>
           </div>
         </div>
 
-        {/* BOTTOM ACTIONS BAR PINNED */}
-        <div className="shrink-0 pt-2.5 mt-2 border-t border-purple-100/70 flex flex-wrap items-center justify-between gap-1.5">
-          
-          {/* Nút Link Bé Rắn */}
-          {linkTarget ? (
-            <a
-              href={linkTarget}
-              target="_blank"
-              rel="noreferrer"
-              className="px-3.5 py-1.5 bg-gradient-to-r from-[#F4ECFF] to-[#FFEBF8] hover:from-[#ebe0fc] hover:to-[#ffd6f4] text-[#5e4373] font-bold text-xs rounded-xl shadow-2xs border border-purple-100 flex items-center gap-1.5 transition-all hover:scale-102 cursor-pointer"
+        {/* BOTTOM ACTION BAR PINNED */}
+        <div className="shrink-0 pt-2.5 mt-2.5 border-t border-purple-100/70 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            {/* Gửi Feedback cho bé */}
+            <button
+              onClick={() => {
+                handleClose();
+                onOpenFeedback(character);
+              }}
+              className="px-3 py-1.5 bg-white hover:bg-purple-50 text-[#644973] text-xs font-semibold rounded-xl border border-purple-100 shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
             >
-              <span>{linkText}</span>
-              <ExternalLink size={12} className="text-[#8b609e]" />
-            </a>
-          ) : (
-            <div className="text-[10px] text-[#a08ca8] italic">
-              Chưa đặt link
-            </div>
-          )}
+              <MessageSquare size={13} className="text-[#b85b88]" /> Gửi Thư / Feedback
+            </button>
 
-          <div className="flex items-center gap-1.5 ml-auto">
-            {/* Nút Admin sửa bé rắn */}
+            {/* Nút Sửa nhanh cho Admin */}
             {isAdmin && onEditCharacter && (
               <button
                 onClick={() => {
-                  onClose();
+                  handleClose();
                   onEditCharacter(character);
                 }}
                 className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold rounded-xl border border-amber-200/80 shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
-                title="Admin: Chỉnh sửa thông tin bé rắn"
               >
-                <Edit2 size={12} className="text-amber-600" /> Sửa bé
+                <Edit2 size={12} /> Sửa Bé
               </button>
             )}
+          </div>
 
-            {/* Nút Gửi Thư Bí Mật / Feedback */}
-            <button
-              onClick={() => { onClose(); onOpenFeedback(character); }}
-              className="px-3 py-1.5 bg-white hover:bg-purple-50 text-[#644973] text-xs font-semibold rounded-xl border border-purple-100 shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
-            >
-              <MessageSquare size={12} className="text-[#b85b88]" /> Gửi Thư
-            </button>
+          <div className="flex items-center gap-1.5 ml-auto">
+            {linkTarget && (
+              <a
+                href={linkTarget}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3.5 py-1.5 bg-gradient-to-r from-[#F3E8FF] to-[#FFE8F7] hover:from-[#e7d6fc] hover:to-[#ffd6f2] text-[#5e4373] font-bold text-xs rounded-xl border border-purple-100 shadow-2xs flex items-center gap-1.5 transition-all hover:scale-102 cursor-pointer"
+              >
+                <span>{linkText}</span>
+                <ExternalLink size={12} className="text-[#8b609e]" />
+              </a>
+            )}
 
-            {/* Nút Đóng */}
             <button
-              onClick={onClose}
-              className="px-3.5 py-1.5 bg-purple-50 hover:bg-purple-100/80 text-[#7a5d7c] text-xs font-semibold rounded-xl cursor-pointer transition-colors"
+              onClick={handleClose}
+              className="px-3 py-1.5 bg-purple-50/70 hover:bg-purple-100/70 text-[#7a5d7c] text-xs font-semibold rounded-xl cursor-pointer transition-colors"
             >
               Đóng
             </button>
           </div>
-
         </div>
 
       </div>
