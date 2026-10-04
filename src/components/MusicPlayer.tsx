@@ -317,11 +317,11 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
       isCharPlaying,
       stopCharMusicSignal
     }}>
-      {/* Native HTML5 Audio Player cho nhạc nền "Đến Đây Bên Anh - Dangrangto":
+      {/* Native HTML5 Audio Player cho nhạc nền "Đến Đây Bên Anh - Dangrangto" (Bản Full 4 phút 02 giây từ đầu đến cuối):
           Phát tức thì ở 0ms ngay khi bấm "Vào lớp thui", bật/tắt 100% nhạy trên mọi trình duyệt */}
       <audio
         ref={audioRef}
-        src="/den-day-ben-anh.m4a"
+        src="/den-day-ben-anh.mp3"
         loop
         preload="auto"
         playsInline
