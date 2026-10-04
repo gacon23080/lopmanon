@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Image as ImageIcon, Save, Sparkles, Upload } from 'lucide-react';
-import { TeacherProfile, updateTeacherProfile } from '../lib/data';
+import { TeacherProfile, updateTeacherProfile, compressImageFile } from '../lib/data';
 import { soundManager } from '../lib/audio';
 
 interface TeacherEditModalProps {
@@ -25,19 +25,20 @@ export const TeacherEditModal: React.FC<TeacherEditModalProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2.5 * 1024 * 1024) {
-        setFormError("Ảnh quá lớn (tối đa 2.5MB). Vui lòng chọn ảnh nhỏ hơn hoặc dùng URL ảnh trực tiếp.");
+      if (file.size > 15 * 1024 * 1024) {
+        setFormError("Ảnh quá lớn (tối đa 15MB). Vui lòng chọn ảnh nhỏ hơn hoặc dùng URL ảnh trực tiếp.");
         return;
       }
       setFormError(null);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setAvatarUrl(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      try {
+        const compressed = await compressImageFile(file, 750, 0.8);
+        setAvatarUrl(compressed);
+      } catch {
+        setFormError("Không thể xử lý ảnh này, vui lòng thử lại.");
+      }
     }
   };
 

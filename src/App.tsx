@@ -21,7 +21,9 @@ import {
   TeacherProfile, 
   AppStats,
   deleteCharacter,
-  deleteTagGlobally
+  deleteTagGlobally,
+  subscribeToClassroomUpdates,
+  syncAdminLocalToCloudIfNeeded
 } from './lib/data';
 import { Mail, Dices } from 'lucide-react';
 import { soundManager } from './lib/audio';
@@ -42,6 +44,7 @@ export default function App() {
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [showTeacherEditModal, setShowTeacherEditModal] = useState(false);
   const [showAddCharModal, setShowAddCharModal] = useState(false);
+  const [editingGlobalChar, setEditingGlobalChar] = useState<Character | null>(null);
   const [showMemoryModal, setShowMemoryModal] = useState(false);
 
   // 18+ Age Verification
@@ -77,12 +80,38 @@ export default function App() {
   };
 
   useEffect(() => {
-    loadData();
     const adminState = localStorage.getItem('isAdmin');
     if (adminState === 'true') {
       setIsAdmin(true);
     }
+    loadData();
+
+    // Lắng nghe cập nhật thời gian thực (Real-time) từ Firestore cho TẤT CẢ người truy cập
+    const unsubscribe = subscribeToClassroomUpdates(
+      (liveChars) => {
+        setCharacters(liveChars);
+      },
+      (liveTeacher) => {
+        setTeacherProfile(liveTeacher);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
+
+  // Tự động đồng bộ activeDetailChar nếu nhân vật đang mở vừa được sửa hoặc xóa
+  useEffect(() => {
+    if (activeDetailChar) {
+      const updated = characters.find(c => c.id === activeDetailChar.id);
+      if (updated) {
+        setActiveDetailChar(updated);
+      } else if (characters.length > 0) {
+        setActiveDetailChar(null);
+      }
+    }
+  }, [characters, activeDetailChar]);
 
   const handleEnterSchool = () => {
     setInClassroom(true);
@@ -107,11 +136,13 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleAdminLogin = (success: boolean) => {
+  const handleAdminLogin = async (success: boolean) => {
     if (success) {
       setIsAdmin(true);
       localStorage.setItem('isAdmin', 'true');
       setShowAdminModal(false);
+      await syncAdminLocalToCloudIfNeeded(true);
+      await loadData();
     }
   };
 
@@ -247,6 +278,7 @@ export default function App() {
           onLogout={handleAdminLogout}
           onOpenTeacherEdit={() => setShowTeacherEditModal(true)}
           onOpenAddCharacter={() => setShowAddCharModal(true)}
+          onEditCharacter={(char) => setEditingGlobalChar(char)}
           onOpenViewFeedbacks={() => {
             setShowAdminModal(false);
             handleSelectTab('mailbox');
@@ -275,10 +307,14 @@ export default function App() {
         />
       )}
 
-      {/* Add Character Modal */}
-      {showAddCharModal && (
+      {/* Add / Edit Character Modal */}
+      {(showAddCharModal || editingGlobalChar) && (
         <CharacterFormModal
-          onClose={() => setShowAddCharModal(false)}
+          characterToEdit={editingGlobalChar}
+          onClose={() => {
+            setShowAddCharModal(false);
+            setEditingGlobalChar(null);
+          }}
           onSuccess={(updated) => loadData(updated)}
         />
       )}
@@ -287,6 +323,7 @@ export default function App() {
       {showMemoryModal && (
         <MemoryCornerModal
           onClose={() => setShowMemoryModal(false)}
+          isAdmin={isAdmin}
         />
       )}
 
@@ -300,6 +337,10 @@ export default function App() {
             handleGoToMailbox(char);
           }}
           isAdmin={isAdmin}
+          onEditCharacter={(char) => {
+            setActiveDetailChar(null);
+            setEditingGlobalChar(char);
+          }}
         />
       )}
 

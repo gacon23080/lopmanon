@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Send, Heart, Trash2, Sparkles, Filter, MessageSquare, Clock, User, ShieldCheck, Lock, Reply, CheckCircle, CornerDownRight } from 'lucide-react';
-import { Character, Feedback, getFeedbacks, addFeedback, deleteFeedback, toggleLikeFeedback, getVisitorId, replyFeedback } from '../lib/data';
+import { Character, Feedback, getFeedbacks, addFeedback, deleteFeedback, deleteAllPublicFeedbacks, deleteFeedbackReply, toggleLikeFeedback, getVisitorId, replyFeedback, subscribeToFeedbacks } from '../lib/data';
 import { soundManager } from '../lib/audio';
 
 interface SecretMailboxSectionProps {
@@ -38,6 +38,8 @@ export const SecretMailboxSection: React.FC<SecretMailboxSectionProps> = ({
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [isSendingReply, setIsSendingReply] = useState(false);
+  const [confirmClearPublic, setConfirmClearPublic] = useState(false);
+  const [isClearingPublic, setIsClearingPublic] = useState(false);
 
   const visitorId = getVisitorId();
 
@@ -52,7 +54,11 @@ export const SecretMailboxSection: React.FC<SecretMailboxSectionProps> = ({
 
   useEffect(() => {
     loadFeedbacks();
-  }, []);
+    const unsub = subscribeToFeedbacks((liveFeedbacks) => {
+      setFeedbacks(liveFeedbacks);
+    });
+    return () => unsub();
+  }, [isAdmin]);
 
   useEffect(() => {
     if (preselectedCharId) {
@@ -146,6 +152,30 @@ export const SecretMailboxSection: React.FC<SecretMailboxSectionProps> = ({
       console.error(err);
     } finally {
       setIsSendingReply(false);
+    }
+  };
+
+  const handleDeleteReply = async (id: string) => {
+    try {
+      soundManager.playPop();
+      const updated = await deleteFeedbackReply(id);
+      setFeedbacks(updated);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleClearAllPublic = async () => {
+    setIsClearingPublic(true);
+    try {
+      soundManager.playPop();
+      const updated = await deleteAllPublicFeedbacks();
+      setFeedbacks(updated);
+      setConfirmClearPublic(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsClearingPublic(false);
     }
   };
 
@@ -377,9 +407,40 @@ export const SecretMailboxSection: React.FC<SecretMailboxSectionProps> = ({
           {activeBoardTab === 'public' && (
             <div className="space-y-4">
               {/* Filter bar */}
-              <div className="flex items-center justify-between px-2 text-xs text-gray-500">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-2 text-xs text-gray-500">
                 <span>Hiển thị thư công khai của các bé ngoan</span>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {isAdmin && publicFeedbacks.length > 0 && (
+                    confirmClearPublic ? (
+                      <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 px-2.5 py-1 rounded-xl">
+                        <span className="text-[11px] font-bold text-red-700">Xóa sạch {publicFeedbacks.length} thư công khai?</span>
+                        <button
+                          type="button"
+                          disabled={isClearingPublic}
+                          onClick={handleClearAllPublic}
+                          className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[10px] font-black cursor-pointer"
+                        >
+                          {isClearingPublic ? 'Đang xóa...' : 'Xóa hết'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmClearPublic(false)}
+                          className="px-2 py-0.5 bg-white hover:bg-gray-100 text-gray-600 rounded-lg text-[10px] font-bold border border-gray-200 cursor-pointer"
+                        >
+                          Hủy
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearPublic(true)}
+                        className="px-2.5 py-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Trash2 size={12} />
+                        <span>Xóa hết thư công khai</span>
+                      </button>
+                    )
+                  )}
                   <Filter size={12} />
                   <select
                     value={filterRecipient}
@@ -453,10 +514,11 @@ export const SecretMailboxSection: React.FC<SecretMailboxSectionProps> = ({
                               <button
                                 onClick={() => handleDelete(fb.id)}
                                 disabled={deletingId === fb.id}
-                                className="p-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-600 text-[10px] font-bold transition-colors cursor-pointer"
-                                title="Admin xóa thư này"
+                                className="px-2 py-1 rounded-lg bg-red-500 hover:bg-red-600 text-white text-[10px] font-black flex items-center gap-1 transition-colors cursor-pointer shadow-2xs"
+                                title="Admin xóa vĩnh viễn thư công khai này"
                               >
-                                <Trash2 size={12} />
+                                <Trash2 size={11} />
+                                <span>{deletingId === fb.id ? '...' : 'Xóa'}</span>
                               </button>
                             )}
                           </div>
@@ -612,12 +674,20 @@ export const SecretMailboxSection: React.FC<SecretMailboxSectionProps> = ({
                                 {fb.adminReply}
                               </p>
                             </div>
-                            <button
-                              onClick={() => handleStartReply(fb)}
-                              className="text-[11px] text-purple-700 hover:underline font-bold shrink-0"
-                            >
-                              Sửa phản hồi
-                            </button>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                onClick={() => handleStartReply(fb)}
+                                className="text-[11px] text-purple-700 hover:underline font-bold cursor-pointer"
+                              >
+                                Sửa
+                              </button>
+                              <button
+                                onClick={() => handleDeleteReply(fb.id)}
+                                className="text-[11px] text-red-600 hover:underline font-bold cursor-pointer"
+                              >
+                                Xóa phản hồi
+                              </button>
+                            </div>
                           </div>
                         ) : (
                           <button

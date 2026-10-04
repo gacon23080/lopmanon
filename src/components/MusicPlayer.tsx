@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, createContext, useContext, useCallb
 import { createPortal } from 'react-dom';
 import { Volume2, VolumeX, Music, Edit2, X, Check } from 'lucide-react';
 import { extractYouTubeId } from '../lib/youtube';
-import { getSchoolMusic, updateSchoolMusic, SchoolMusicConfig, DEFAULT_SCHOOL_MUSIC } from '../lib/data';
+import { getSchoolMusic, updateSchoolMusic, subscribeToSchoolMusic, SchoolMusicConfig, DEFAULT_SCHOOL_MUSIC } from '../lib/data';
 import { soundManager } from '../lib/audio';
 
 interface MusicContextType {
@@ -13,6 +13,7 @@ interface MusicContextType {
   pauseMusic: () => void;
   openEditModal: () => void;
   setCharPlaying: (playing: boolean) => void;
+  setCharModalOpen: (open: boolean) => void;
   isCharPlaying: boolean;
   stopCharMusicSignal: number;
 }
@@ -34,6 +35,17 @@ interface MusicProviderProps {
   isPausedByModal?: boolean;
 }
 
+// Danh sách các YouTube ID của bài "Đến Đây Bên Anh - Dangrangto" (sử dụng trực tiếp file âm thanh gốc chất lượng cao để phát tức thì 0ms, không bao giờ bị YouTube chặn nhúng)
+const DEN_DAY_BEN_ANH_IDS = new Set([
+  '3Ozo7tejr00',
+  'iwAUr6kR2GU',
+  'bTzglgODJKE',
+  'JpyFnhyhyI0',
+  '6WGMyJb1YrY',
+  'nJ3B7xZ1eLo',
+  'lyr7zbk8NUA',
+]);
+
 export const MusicProvider: React.FC<MusicProviderProps> = ({ 
   children,
   autoPlayTrigger = false,
@@ -42,14 +54,25 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isCharPlaying, setIsCharPlaying] = useState(false);
+  const [isCharModalOpen, setIsCharModalOpen] = useState(false);
   const [stopCharMusicSignal, setStopCharMusicSignal] = useState(0);
-  const [hasBeenStoppedOnce, setHasBeenStoppedOnce] = useState(false);
-  const [musicConfig, setMusicConfig] = useState<SchoolMusicConfig>(DEFAULT_SCHOOL_MUSIC);
+  const [ytEmbedError, setYtEmbedError] = useState(false);
+  const [musicConfig, setMusicConfig] = useState<SchoolMusicConfig>(() => {
+    try {
+      const cached = localStorage.getItem('schoolMusic');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.url) return { ...DEFAULT_SCHOOL_MUSIC, ...parsed };
+      }
+    } catch {}
+    return DEFAULT_SCHOOL_MUSIC;
+  });
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editUrl, setEditUrl] = useState('');
-  const [editTitle, setEditTitle] = useState('');
+  const [editUrl, setEditUrl] = useState(musicConfig.url);
+  const [editTitle, setEditTitle] = useState(musicConfig.title);
   const [isSaving, setIsSaving] = useState(false);
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const hasAutoPlayedRef = useRef(false);
   const playTimersRef = useRef<number[]>([]);
@@ -64,7 +87,7 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
     const loadMusic = async () => {
       try {
         const config = await getSchoolMusic();
-        setMusicConfig(config);
+        setMusicConfig((prev) => (prev.url === config.url && prev.title === config.title ? prev : config));
         setEditUrl(config.url);
         setEditTitle(config.title);
       } catch (e) {
@@ -72,19 +95,41 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
       }
     };
     loadMusic();
+    const unsub = subscribeToSchoolMusic((liveConfig) => {
+      setMusicConfig((prev) => (prev.url === liveConfig.url && prev.title === liveConfig.title ? prev : liveConfig));
+      setEditUrl(liveConfig.url);
+      setEditTitle(liveConfig.title);
+      setYtEmbedError(false);
+    });
+    return () => unsub();
   }, []);
 
   const videoId = extractYouTubeId(musicConfig.url) || "3Ozo7tejr00";
+  const isDefaultSong = !videoId || DEN_DAY_BEN_ANH_IDS.has(videoId) || ytEmbedError;
 
-  // Send command to YouTube iframe via standard postMessage
+  const isBgSuppressed = isCharPlaying || isCharModalOpen || isPausedByModal;
+  const shouldPlayBg = autoPlayTrigger && isPlaying && !isBgSuppressed;
+
+  // Send command to YouTube iframe via standard postMessage (with listening handshake)
   const sendCommand = useCallback((func: string, args: any[] = []) => {
     try {
-      if (iframeRef.current && iframeRef.current.contentWindow) {
-        iframeRef.current.contentWindow.postMessage(
+      const win = iframeRef.current?.contentWindow;
+      if (win) {
+        win.postMessage(
+          JSON.stringify({
+            event: "listening",
+            id: 1,
+            channel: "widget"
+          }),
+          "*"
+        );
+        win.postMessage(
           JSON.stringify({
             event: "command",
             func: func,
-            args: args
+            args: args,
+            id: 1,
+            channel: "widget"
           }),
           "*"
         );
@@ -94,85 +139,146 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
     }
   }, []);
 
-  // Phát nhạc ngay tức thì
+  const triggerBgPlay = useCallback(() => {
+    sendCommand("unMute", []);
+    sendCommand("setVolume", [100]);
+    sendCommand("playVideo", []);
+  }, [sendCommand]);
+
+  // Listen for YouTube embed errors (e.g. Error 150 copyright block on custom MVs)
+  useEffect(() => {
+    if (isDefaultSong || !shouldPlayBg) return;
+    const handleMessage = (event: MessageEvent) => {
+      if (typeof event.data !== 'string') return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data && data.event === 'onError') {
+          setYtEmbedError(true);
+        }
+      } catch {}
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [isDefaultSong, shouldPlayBg]);
+
+  // Phát nhạc ngay tức thì (gọi trực tiếp trong sự kiện click "Vào lớp thui" để trình duyệt mở khóa 100% ở 0ms)
   const playMusic = useCallback(() => {
-    clearPlayTimers();
     setIsPlaying(true);
-    if (!isCharPlaying && !isPausedByModal) {
-      sendCommand("unMute", []);
-      sendCommand("setVolume", [100]);
-      sendCommand("playVideo", []);
-
-      const t1 = window.setTimeout(() => {
-        sendCommand("unMute", []);
-        sendCommand("setVolume", [100]);
-        sendCommand("playVideo", []);
-      }, 120);
-
-      const t2 = window.setTimeout(() => {
-        sendCommand("unMute", []);
-        sendCommand("setVolume", [100]);
-        sendCommand("playVideo", []);
-      }, 380);
-
-      playTimersRef.current = [t1, t2];
+    if (isDefaultSong && audioRef.current && !isBgSuppressed) {
+      try {
+        audioRef.current.volume = 0.85;
+        audioRef.current.muted = false;
+        const p = audioRef.current.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => {});
+        }
+      } catch {}
     }
-  }, [clearPlayTimers, isCharPlaying, isPausedByModal, sendCommand]);
+  }, [isDefaultSong, isBgSuppressed]);
 
-  // Tắt / tạm dừng nhạc nền hoàn toàn (gỡ iframe + gửi lệnh pause)
+  // Tắt nhạc nền hoàn toàn ngay lập tức
   const pauseMusic = useCallback(() => {
     clearPlayTimers();
     setIsPlaying(false);
-    setHasBeenStoppedOnce(true);
-    sendCommand("pauseVideo", []);
-    sendCommand("stopVideo", []);
-    sendCommand("mute", []);
-  }, [clearPlayTimers, sendCommand]);
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+      } catch {}
+    }
+  }, [clearPlayTimers]);
 
-  // Chuyển đổi trạng thái Bật / Tắt (Nếu nhạc nhân vật đang kêu thì tắt luôn cả nhạc nhân vật!)
+  // Chuyển đổi trạng thái Bật / Tắt khi người truy cập bấm nút trong lớp
   const toggleMusic = useCallback(() => {
     soundManager.playPop();
     if (isCharPlaying) {
-      // Nếu nhạc nhân vật đang phát -> bấm nút tắt nhạc sẽ tắt ngay nhạc nhân vật & giữ im lặng
+      // Nếu nhạc nhân vật đang phát -> tắt ngay nhạc nhân vật
       setStopCharMusicSignal((prev) => prev + 1);
       setIsCharPlaying(false);
-      pauseMusic();
       return;
     }
-    if (isPlaying) {
-      pauseMusic();
-    } else {
-      playMusic();
-    }
-  }, [isCharPlaying, isPlaying, playMusic, pauseMusic]);
+    setIsPlaying((prev) => {
+      const next = !prev;
+      if (isDefaultSong && audioRef.current) {
+        try {
+          if (next && !isBgSuppressed) {
+            audioRef.current.volume = 0.85;
+            audioRef.current.muted = false;
+            const p = audioRef.current.play();
+            if (p && typeof p.catch === 'function') {
+              p.catch(() => {});
+            }
+          } else {
+            audioRef.current.pause();
+          }
+        } catch {}
+      }
+      return next;
+    });
+  }, [isCharPlaying, isDefaultSong, isBgSuppressed]);
 
-  // Chỉ tự động phát ĐÚNG 1 LẦN khi bấm "Vào lớp thui" (autoPlayTrigger chuyển sang true)
+  // Tự động phát ĐÚNG 1 LẦN ngay khi ấn "Vào lớp thui" (autoPlayTrigger chuyển sang true)
   useEffect(() => {
     if (autoPlayTrigger && !hasAutoPlayedRef.current) {
       hasAutoPlayedRef.current = true;
-      playMusic();
+      setIsPlaying(true);
     } else if (!autoPlayTrigger && hasAutoPlayedRef.current) {
       hasAutoPlayedRef.current = false;
-      pauseMusic();
-    }
-  }, [autoPlayTrigger, playMusic, pauseMusic]);
-
-  // Khi nhạc của nhân vật (char) bật hoặc modal video mở -> Đánh dấu đã dừng để gỡ iframe nền ngay lập tức
-  useEffect(() => {
-    if (isCharPlaying || isPausedByModal) {
+      setIsPlaying(false);
       clearPlayTimers();
-      setHasBeenStoppedOnce(true);
-      sendCommand("pauseVideo", []);
-      sendCommand("mute", []);
-    } else if (isPlaying && autoPlayTrigger) {
-      sendCommand("unMute", []);
-      sendCommand("setVolume", [100]);
-      sendCommand("playVideo", []);
+      if (audioRef.current) {
+        try {
+          audioRef.current.pause();
+          audioRef.current.currentTime = 0;
+        } catch {}
+      }
     }
-  }, [isCharPlaying, isPausedByModal, isPlaying, autoPlayTrigger, clearPlayTimers, sendCommand]);
+  }, [autoPlayTrigger, clearPlayTimers]);
+
+  // Đồng bộ trạng thái phát / tạm dừng của HTML5 Audio và YouTube Iframe theo shouldPlayBg
+  useEffect(() => {
+    if (shouldPlayBg) {
+      if (isDefaultSong) {
+        clearPlayTimers();
+        if (audioRef.current) {
+          audioRef.current.volume = 0.85;
+          audioRef.current.muted = false;
+          if (audioRef.current.paused) {
+            const p = audioRef.current.play();
+            if (p && typeof p.catch === 'function') {
+              p.catch(() => {});
+            }
+          }
+        }
+      } else {
+        if (audioRef.current && !audioRef.current.paused) {
+          audioRef.current.pause();
+        }
+        const t1 = window.setTimeout(triggerBgPlay, 150);
+        const t2 = window.setTimeout(triggerBgPlay, 450);
+        const t3 = window.setTimeout(triggerBgPlay, 900);
+        playTimersRef.current = [t1, t2, t3];
+        return () => {
+          window.clearTimeout(t1);
+          window.clearTimeout(t2);
+          window.clearTimeout(t3);
+        };
+      }
+    } else {
+      clearPlayTimers();
+      if (audioRef.current && !audioRef.current.paused) {
+        try {
+          audioRef.current.pause();
+        } catch {}
+      }
+    }
+  }, [shouldPlayBg, isDefaultSong, videoId, triggerBgPlay, clearPlayTimers]);
 
   const setCharPlaying = useCallback((playing: boolean) => {
     setIsCharPlaying(playing);
+  }, []);
+
+  const setCharModalOpen = useCallback((open: boolean) => {
+    setIsCharModalOpen(open);
   }, []);
 
   const handleSaveMusic = async (e: React.FormEvent) => {
@@ -186,12 +292,10 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
         title: editTitle.trim() || 'Nhạc nền Mầm Non Rắn Con 🎵',
       };
       await updateSchoolMusic(newConfig);
+      setYtEmbedError(false);
       setMusicConfig(newConfig);
       setShowEditModal(false);
       soundManager.playSparkle();
-      
-      // Tự động phát bài hát mới vừa đổi
-      setHasBeenStoppedOnce(true);
       setIsPlaying(true);
     } catch (e) {
       console.error("Failed to save school music:", e);
@@ -199,19 +303,6 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
       setIsSaving(false);
     }
   };
-
-  // Logic hiển thị Iframe Nhạc Nền:
-  // 1. Khi còn ở cổng trường (!autoPlayTrigger): Nạp sẵn ngầm (Pre-warm) với autoplay=0
-  // 2. Khi đã vào lớp (autoPlayTrigger === true):
-  //    - Chỉ giữ iframe khi (isPlaying && !isCharPlaying && !isPausedByModal)
-  //    - Ngay khi người dùng bấm "Tắt nhạc" (!isPlaying) hoặc nhạc nhân vật bật (isCharPlaying):
-  //      Gỡ hoàn toàn iframe khỏi DOM -> Nhạc tắt NGAY LẬP TỨC 100% không thể kêu thêm dù chỉ 1 giây!
-  const shouldRenderBgIframe = Boolean(videoId) && (
-    !autoPlayTrigger || (isPlaying && !isCharPlaying && !isPausedByModal)
-  );
-
-  // Nếu đã từng tắt hoặc tạm dừng rồi bật lại trong lớp -> dùng autoplay=1 để phát ngay khi mount lại
-  const iframeAutoplayParam = (autoPlayTrigger && hasBeenStoppedOnce) ? 1 : 0;
 
   return (
     <MusicContext.Provider value={{
@@ -222,10 +313,23 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
       pauseMusic,
       openEditModal: () => setShowEditModal(true),
       setCharPlaying,
+      setCharModalOpen,
       isCharPlaying,
       stopCharMusicSignal
     }}>
-      {shouldRenderBgIframe && (
+      {/* Native HTML5 Audio Player cho nhạc nền "Đến Đây Bên Anh - Dangrangto":
+          Phát tức thì ở 0ms ngay khi bấm "Vào lớp thui", bật/tắt 100% nhạy trên mọi trình duyệt */}
+      <audio
+        ref={audioRef}
+        src="/den-day-ben-anh.m4a"
+        loop
+        preload="auto"
+        playsInline
+        className="hidden"
+      />
+
+      {/* YouTube Iframe Player khi Admin đổi sang bài hát YouTube khác */}
+      {shouldPlayBg && !isDefaultSong && typeof document !== 'undefined' && createPortal(
         <div 
           aria-hidden="true"
           style={{
@@ -234,28 +338,24 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
             right: '0px',
             width: '240px',
             height: '160px',
-            opacity: 0.001,
+            opacity: 0.01,
             pointerEvents: 'none',
-            zIndex: -50,
+            zIndex: 35,
             overflow: 'hidden',
           }}
         >
           <iframe
+            key={videoId}
             ref={iframeRef}
             width="240"
             height="160"
-            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=${iframeAutoplayParam}&controls=0&loop=1&playlist=${videoId}&playsinline=1`}
+            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=0&loop=1&playlist=${videoId}&playsinline=1`}
             title={musicConfig.title}
             allow="autoplay; encrypted-media; picture-in-picture"
-            onLoad={() => {
-              if (autoPlayTrigger && isPlaying && !isCharPlaying && !isPausedByModal) {
-                sendCommand("unMute", []);
-                sendCommand("setVolume", [100]);
-                sendCommand("playVideo", []);
-              }
-            }}
+            onLoad={triggerBgPlay}
           />
-        </div>
+        </div>,
+        document.body
       )}
 
       {children}
@@ -341,7 +441,8 @@ export const MusicProvider: React.FC<MusicProviderProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Floating Mini Music Bar in Classroom UI */}

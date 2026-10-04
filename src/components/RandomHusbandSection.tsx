@@ -27,13 +27,37 @@ export const RandomHusbandSection: React.FC<RandomHusbandSectionProps> = ({
   const [isPlayingMusic, setIsPlayingMusic] = useState(true);
   const [history, setHistory] = useState<Character[]>([]);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const initialSignalRef = useRef(stopCharMusicSignal);
 
   const youtubeId = selectedHusband ? extractYouTubeId(selectedHusband.youtubeMusicUrl) : null;
+
+  const triggerHusbandMusic = () => {
+    try {
+      if (iframeRef.current && iframeRef.current.contentWindow) {
+        ['unMute', 'playVideo'].forEach((func) => {
+          iframeRef.current?.contentWindow?.postMessage(
+            JSON.stringify({ event: 'command', func, args: [] }),
+            '*'
+          );
+        });
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+          '*'
+        );
+      }
+    } catch {}
+  };
 
   // Khi nhạc nhân vật trong phần bốc thăm phát -> Tự động dừng nhạc nền lớp học
   useEffect(() => {
     if (youtubeId && isPlayingMusic && !isRolling) {
       setCharPlaying(true);
+      const t1 = window.setTimeout(triggerHusbandMusic, 150);
+      const t2 = window.setTimeout(triggerHusbandMusic, 450);
+      return () => {
+        window.clearTimeout(t1);
+        window.clearTimeout(t2);
+      };
     } else {
       setCharPlaying(false);
     }
@@ -42,13 +66,31 @@ export const RandomHusbandSection: React.FC<RandomHusbandSectionProps> = ({
     };
   }, [youtubeId, isPlayingMusic, isRolling, setCharPlaying]);
 
-  // Lắng nghe tín hiệu tắt nhạc từ thanh Header / Floating Bar
+  // Lắng nghe tín hiệu tắt nhạc từ thanh Header / Floating Bar (chỉ khi thay đổi thực sự)
   useEffect(() => {
-    if (stopCharMusicSignal > 0) {
+    if (stopCharMusicSignal !== initialSignalRef.current) {
+      initialSignalRef.current = stopCharMusicSignal;
       setIsPlayingMusic(false);
       setCharPlaying(false);
     }
   }, [stopCharMusicSignal, setCharPlaying]);
+
+  // Tự động đồng bộ dữ liệu mới nhất khi Admin sửa hoặc xóa nhân vật / tag
+  useEffect(() => {
+    if (selectedHusband && !isRolling) {
+      const latest = characters.find(c => c.id === selectedHusband.id);
+      if (latest) {
+        setSelectedHusband(latest);
+      } else if (characters.length > 0) {
+        setSelectedHusband(null);
+      }
+    }
+    setHistory(prev =>
+      prev
+        .map(item => characters.find(c => c.id === item.id))
+        .filter((item): item is Character => Boolean(item))
+    );
+  }, [characters, isRolling]);
 
   // Filter pool
   const candidatePool = characters.filter(c => {
@@ -126,22 +168,24 @@ export const RandomHusbandSection: React.FC<RandomHusbandSectionProps> = ({
           aria-hidden="true"
           style={{
             position: 'fixed',
-            top: '-9999px',
-            left: '-9999px',
-            width: '320px',
-            height: '240px',
-            opacity: 0.001,
+            bottom: '0px',
+            right: '0px',
+            width: '240px',
+            height: '160px',
+            opacity: 0.01,
             pointerEvents: 'none',
-            zIndex: -9999,
+            zIndex: 35,
+            overflow: 'hidden',
           }}
         >
           <iframe
             ref={iframeRef}
-            width="320"
-            height="240"
-            src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1&autoplay=1&loop=1&playlist=${youtubeId}&playsinline=1`}
+            width="240"
+            height="160"
+            src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1&autoplay=1&controls=0&loop=1&playlist=${youtubeId}&playsinline=1`}
             title={`Nhạc nền của ${selectedHusband?.name}`}
             allow="autoplay; encrypted-media; picture-in-picture"
+            onLoad={triggerHusbandMusic}
           />
         </div>
       )}

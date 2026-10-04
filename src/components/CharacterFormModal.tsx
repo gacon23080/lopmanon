@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Sparkles, Upload, Music, Bot, ShieldAlert, Plus, Link, Cake, Calendar, Heart, HeartCrack, BookOpen } from 'lucide-react';
-import { Character, addCharacter, updateCharacter } from '../lib/data';
+import { X, Sparkles, Upload, Music, ShieldAlert, Plus, Link, Cake, Calendar, Heart, HeartCrack, BookOpen } from 'lucide-react';
+import { 
+  Character, 
+  addCharacter, 
+  updateCharacter, 
+  compressImageFile, 
+  getAvailablePresetTags, 
+  getAvailablePresetTagsSync, 
+  deleteTagGlobally,
+  registerTagsByAdmin
+} from '../lib/data';
 import { extractYouTubeId } from '../lib/youtube';
 import { soundManager } from '../lib/audio';
 
@@ -10,23 +19,6 @@ interface CharacterFormModalProps {
   onSuccess: (updatedList?: Character[]) => void;
   characterToEdit?: Character | null;
 }
-
-const PRESET_TAGS = [
-  'Ngọt', 
-  'Ngược', 
-  'Thanh xuân vườn trường', 
-  'Hiện đại', 
-  'Cổ trang / Tiên hiệp', 
-  'Yếu tố giả tưởng', 
-  'Chiếm hữu', 
-  'Giam cầm nhẹ', 
-  'Tổng tài', 
-  'Niên hạ', 
-  'Niên thượng', 
-  'Xà thần / Dị tộc', 
-  'Hài hước', 
-  '18+'
-];
 
 export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose, onSuccess, characterToEdit }) => {
   const [name, setName] = useState('');
@@ -41,9 +33,17 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
   const [linkLabel, setLinkLabel] = useState('Trò chuyện trên Google AI 🤖');
   const [youtubeMusicUrl, setYoutubeMusicUrl] = useState('');
   const [tags, setTags] = useState<string[]>([]);
+  const [presetTags, setPresetTags] = useState<string[]>(() => getAvailablePresetTagsSync());
   const [customTagInput, setCustomTagInput] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCompressingImage, setIsCompressingImage] = useState(false);
+
+  useEffect(() => {
+    getAvailablePresetTags().then(loaded => {
+      setPresetTags(loaded);
+    });
+  }, []);
 
   useEffect(() => {
     if (characterToEdit) {
@@ -71,27 +71,51 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
     }
   };
 
-  const handleAddCustomTag = () => {
-    const trimmed = customTagInput.trim();
-    if (trimmed && !tags.includes(trimmed)) {
-      setTags([...tags, trimmed]);
-      setCustomTagInput('');
+  const handleDeletePresetTagPermanently = async (tagToRemove: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    soundManager.playPop();
+    setPresetTags(prev => prev.filter(t => t !== tagToRemove));
+    setTags(prev => prev.filter(t => t !== tagToRemove));
+    try {
+      const updatedChars = await deleteTagGlobally(tagToRemove);
+      onSuccess(updatedChars);
+    } catch (err) {
+      console.error("Error permanently deleting preset tag:", err);
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAddCustomTag = async () => {
+    const trimmed = customTagInput.trim();
+    if (!trimmed) return;
+    if (!tags.includes(trimmed)) {
+      setTags(prev => [...prev, trimmed]);
+    }
+    if (!presetTags.includes(trimmed)) {
+      setPresetTags(prev => [...prev, trimmed]);
+    }
+    setCustomTagInput('');
+    await registerTagsByAdmin([trimmed]);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2.5 * 1024 * 1024) {
-        setFormError("Ảnh tải lên quá lớn (tối đa 2.5MB). Vui lòng chọn ảnh nhẹ hơn hoặc dùng link URL ảnh.");
-        return;
-      }
-      setFormError(null);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImageUrl(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    if (file.size > 15 * 1024 * 1024) {
+      setFormError("Ảnh tải lên quá lớn (tối đa 15MB). Vui lòng chọn ảnh nhẹ hơn hoặc dùng link URL ảnh.");
+      return;
+    }
+
+    setFormError(null);
+    setIsCompressingImage(true);
+    try {
+      const compressedDataUrl = await compressImageFile(file, 850, 0.8);
+      setImageUrl(compressedDataUrl);
+    } catch (err) {
+      console.error("Image compression error:", err);
+      setFormError("Không thể xử lý ảnh này, vui lòng thử ảnh khác.");
+    } finally {
+      setIsCompressingImage(false);
     }
   };
 
@@ -100,10 +124,6 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
     setFormError(null);
     if (!name.trim() || !bio.trim()) {
       setFormError("Vui lòng điền tên nhân vật và giới thiệu ngắn!");
-      return;
-    }
-    if (tags.length === 0) {
-      setFormError("Vui lòng chọn ít nhất 1 tag phân loại cho bé rắn bbi nhé!");
       return;
     }
     
@@ -150,7 +170,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
   return createPortal(
     <div className="fixed inset-0 z-[99999] flex items-center justify-center p-3 sm:p-4 pt-12 pb-6 sm:pt-6 overflow-y-auto">
       <div className="fixed inset-0 bg-black/65 backdrop-blur-md" onClick={onClose}></div>
-      <div className="bg-[#FFFBF5] rounded-3xl p-5 sm:p-7 w-full max-w-xl my-auto relative z-10 shadow-2xl border-4 border-white max-h-[82vh] overflow-y-auto animate-in fade-in zoom-in-95">
+      <div className="bg-[#FFFBF5] rounded-3xl p-5 sm:p-7 w-full max-w-xl my-auto relative z-10 shadow-2xl border border-purple-100 max-h-[82vh] overflow-y-auto animate-in fade-in zoom-in-95">
         <button 
           onClick={onClose} 
           className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 bg-white rounded-full p-2.5 shadow-sm cursor-pointer z-10"
@@ -158,14 +178,14 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
           <X size={18} />
         </button>
         
-        <div className="flex items-center gap-2 mb-1 text-[#5a4872]">
-          <Sparkles size={22} className="text-pink-600" />
-          <h2 className="text-2xl font-black">
+        <div className="flex items-center gap-2 mb-1 text-[#5e4373]">
+          <Sparkles size={22} className="text-pink-500" />
+          <h2 className="text-2xl font-bold">
             {characterToEdit ? 'Chỉnh Sửa Bé Rắn' : 'Thêm Bé Rắn Mới Vào Lớp'}
           </h2>
         </div>
-        <p className="text-xs text-gray-500 mb-5">
-          Admin vui lòng cập nhật đầy đủ thông tin: ảnh dọc, tuổi, ngày sinh, thích, ghét, story và link hiển thị.
+        <p className="text-xs text-[#7e608a] mb-5">
+          Mọi thông tin bạn sửa hoặc xóa (tên, ảnh, tuổi, sở thích, ghét, story, tag) sẽ tự động lưu vĩnh viễn cho tất cả mọi người truy cập.
         </p>
 
         {formError && (
@@ -177,8 +197,8 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
         <form onSubmit={handleSubmit} className="space-y-4 text-left">
           
           {/* Vertical Portrait Image Upload & Preview */}
-          <div className="bg-white p-4 rounded-2xl border border-purple-100 flex flex-col sm:flex-row items-center gap-4 shadow-sm">
-            <div className="relative w-24 h-32 rounded-2xl bg-gradient-to-tr from-[#EDE4FF] to-[#FFE8F7] p-1 shadow-sm shrink-0 overflow-hidden flex items-center justify-center border-2 border-purple-200">
+          <div className="bg-white p-4 rounded-2xl border border-purple-100 flex flex-col sm:flex-row items-center gap-4 shadow-2xs">
+            <div className="relative w-24 h-32 rounded-2xl bg-gradient-to-tr from-[#EDE4FF] to-[#FFE8F7] p-1 shadow-2xs shrink-0 overflow-hidden flex items-center justify-center border border-purple-200">
               {imageUrl ? (
                 <img src={imageUrl} alt="Preview ảnh dọc" className="w-full h-full object-cover rounded-xl" />
               ) : (
@@ -190,7 +210,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
             </div>
 
             <div className="flex-1 space-y-2 w-full">
-              <label className="block text-xs font-bold text-gray-700">
+              <label className="block text-xs font-bold text-[#5e4373]">
                 🖼️ Ảnh dọc nhân vật (Dán link URL hoặc Tải từ máy)
               </label>
               <input
@@ -200,17 +220,29 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
                 placeholder="Dán link ảnh dọc (https://...)"
                 className="w-full bg-[#FAF7FF] border border-purple-100 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-purple-300 text-gray-800"
               />
-              <label className="inline-flex items-center gap-1.5 bg-[#EDE4FF] hover:bg-[#ded2fb] text-purple-950 text-xs font-bold px-3.5 py-1.5 rounded-xl cursor-pointer shadow-sm transition-colors">
-                <Upload size={13} /> Tải ảnh dọc từ máy...
-                <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
-              </label>
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="inline-flex items-center gap-1.5 bg-[#EDE4FF] hover:bg-[#ded2fb] text-[#5e4373] text-xs font-bold px-3.5 py-1.5 rounded-xl cursor-pointer shadow-2xs transition-colors">
+                  <Upload size={13} />
+                  <span>{isCompressingImage ? 'Đang xử lý ảnh...' : 'Tải ảnh dọc từ máy...'}</span>
+                  <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" disabled={isCompressingImage} />
+                </label>
+                {imageUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setImageUrl('')}
+                    className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold rounded-xl cursor-pointer transition-colors"
+                  >
+                    Xóa ảnh cũ
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
           {/* Name & Age */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">Tên nhân vật *</label>
+              <label className="block text-xs font-bold text-[#5e4373] mb-1">Tên nhân vật *</label>
               <input 
                 required 
                 type="text" 
@@ -222,7 +254,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
+              <label className="block text-xs font-bold text-[#5e4373] mb-1 flex items-center gap-1">
                 <Cake size={13} className="text-pink-500" /> Tuổi
               </label>
               <input 
@@ -238,7 +270,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
           {/* Birthday, Likes, Dislikes */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
+              <label className="block text-xs font-bold text-[#5e4373] mb-1 flex items-center gap-1">
                 <Calendar size={13} className="text-blue-500" /> Ngày sinh
               </label>
               <input 
@@ -251,7 +283,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
+              <label className="block text-xs font-bold text-[#5e4373] mb-1 flex items-center gap-1">
                 <Heart size={13} className="text-pink-500" /> Sở thích
               </label>
               <input 
@@ -264,7 +296,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
+              <label className="block text-xs font-bold text-[#5e4373] mb-1 flex items-center gap-1">
                 <HeartCrack size={13} className="text-red-400" /> Ghét
               </label>
               <input 
@@ -279,20 +311,20 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
 
           {/* Story / Cốt truyện (Trọng tâm chính) & Bio phụ */}
           <div>
-            <label className="block text-xs font-bold text-[#5e35b1] mb-1 flex items-center gap-1">
+            <label className="block text-xs font-bold text-[#5e4373] mb-1 flex items-center gap-1">
               <BookOpen size={14} className="text-purple-600" /> 🌸 Story / Cốt truyện chi tiết của bé rắn *
             </label>
             <textarea 
               value={story} 
               onChange={e => setStory(e.target.value)} 
-              className="w-full bg-white border-2 border-purple-100 focus:border-[#C4B5FD] rounded-xl p-3.5 outline-none min-h-[140px] text-xs sm:text-sm text-gray-800 leading-relaxed shadow-inner" 
+              className="w-full bg-white border border-purple-100 focus:border-[#C4B5FD] rounded-xl p-3.5 outline-none min-h-[140px] text-xs sm:text-sm text-gray-800 leading-relaxed shadow-inner" 
               placeholder="Nhập chi tiết cốt truyện, tương tác, bối cảnh và tình cảm ngọt ngào giữa bạn và bé rắn..." 
             />
           </div>
 
           <div>
-            <label className="block text-[11px] font-bold text-gray-500 mb-1">
-              Lời tự sự ngắn (Tùy chọn)
+            <label className="block text-[11px] font-bold text-[#7e608a] mb-1">
+              Giới thiệu ngắn (Hiển thị trên thẻ ngoài lớp học) *
             </label>
             <input 
               type="text"
@@ -306,7 +338,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
           {/* Link URL & Custom Button Name (Tự admin sửa) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-purple-50/50 p-3.5 rounded-2xl border border-purple-100">
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
+              <label className="block text-xs font-bold text-[#5e4373] mb-1 flex items-center gap-1">
                 <Link size={13} className="text-blue-600" /> Link liên kết của bé rắn
               </label>
               <input 
@@ -319,7 +351,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
+              <label className="block text-xs font-bold text-[#5e4373] mb-1 flex items-center gap-1">
                 <span>🏷️</span> Tên nút hiển thị cho link (Admin tự sửa)
               </label>
               <input 
@@ -335,8 +367,8 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
           {/* YouTube Background Music (Tự động phát in-app khi ấn vào char) */}
           <div className="bg-[#FAF7FF] p-3 rounded-2xl border border-purple-100 space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="block text-xs font-bold text-gray-700 flex items-center gap-1">
-                <Music size={14} className="text-pink-600" /> Link Nhạc nền YouTube (Tự động bật khi mở char, không chuyển tab)
+              <label className="block text-xs font-bold text-[#5e4373] flex items-center gap-1">
+                <Music size={14} className="text-pink-600" /> Link Nhạc nền YouTube (Tự động bật khi mở char)
               </label>
               {extractYouTubeId(youtubeMusicUrl) && (
                 <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
@@ -354,10 +386,10 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
           </div>
 
           {/* Tag Selector */}
-          <div className="bg-white p-3.5 rounded-2xl border border-purple-100 space-y-2.5 shadow-xs">
+          <div className="bg-white p-3.5 rounded-2xl border border-purple-100 space-y-2.5 shadow-2xs">
             <div className="flex items-center justify-between">
-              <label className="block text-xs font-bold text-gray-700">
-                🏷️ Phân loại Tag của bé rắn *
+              <label className="block text-xs font-bold text-[#5e4373]">
+                🏷️ Phân loại Tag của bé rắn
               </label>
               <span className="text-[11px] text-purple-700 font-bold bg-purple-50 px-2.5 py-0.5 rounded-md">
                 Đã chọn: {tags.length} tag
@@ -367,7 +399,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
             {/* Active Selected Tags with Quick Delete */}
             {tags.length > 0 && (
               <div className="p-2 bg-[#FAF7FF] rounded-xl border border-purple-100/70 space-y-1">
-                <span className="text-[10px] font-bold text-gray-500 block">Tag đang chọn (Bấm × để xóa tag khỏi bé):</span>
+                <span className="text-[10px] font-bold text-gray-500 block">Tag đang gắn cho bé này (Bấm × để gỡ khỏi bé):</span>
                 <div className="flex flex-wrap gap-1.5">
                   {tags.map(tag => {
                     const is18 = ['18+', 'r18', 'h+', 'nsfw', '+18'].includes(tag.toLowerCase());
@@ -377,7 +409,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
                         className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.8 rounded-full border shadow-2xs ${
                           is18 
                             ? 'bg-red-500 text-white border-red-600' 
-                            : 'bg-gradient-to-r from-[#DFD1FF] to-[#FFDEF9] text-purple-950 border-white'
+                            : 'bg-gradient-to-r from-[#DFD1FF] to-[#FFDEF9] text-[#5e4373] border-white'
                         }`}
                       >
                         <span>{is18 ? `🔞 ${tag}` : tag}</span>
@@ -387,7 +419,7 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
                           className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[10px] cursor-pointer transition-transform hover:scale-115 ${
                             is18 ? 'bg-red-700 text-white' : 'bg-purple-900/20 hover:bg-purple-900 text-purple-950 hover:text-white'
                           }`}
-                          title={`Xóa tag "${tag}"`}
+                          title={`Gỡ tag "${tag}" khỏi bé này`}
                         >
                           <X size={10} />
                         </button>
@@ -398,31 +430,42 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
               </div>
             )}
 
-            {/* Preset Tags */}
+            {/* Preset Tags (Có thể xóa vĩnh viễn tag gợi ý ngay tại đây) */}
             <div className="space-y-1">
-              <span className="text-[10px] font-bold text-gray-500 block">Gợi ý tag nhanh (Bấm để chọn / bỏ chọn):</span>
+              <span className="text-[10px] font-bold text-gray-500 block">
+                Danh sách Tag hệ thống (Bấm vào tên để chọn • Bấm dấu × đỏ để xóa vĩnh viễn tag khỏi toàn web):
+              </span>
               <div className="flex flex-wrap gap-1.5">
-                {PRESET_TAGS.map(tag => {
+                {presetTags.map(tag => {
                   const isSelected = tags.includes(tag);
                   const is18 = tag === '18+';
 
                   return (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => toggleTag(tag)}
-                      className={`px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer border ${
-                        isSelected
-                          ? is18
-                            ? 'bg-red-500 text-white border-red-500 shadow-sm'
-                            : 'bg-[#EDE4FF] text-purple-950 border-purple-300 shadow-sm font-black'
-                          : is18
-                            ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
-                            : 'bg-[#FAF7FF] text-gray-600 border-purple-100 hover:bg-purple-50'
-                      }`}
-                    >
-                      {is18 ? '🔞 18+' : tag}
-                    </button>
+                    <div key={tag} className="relative inline-flex items-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleTag(tag)}
+                        className={`pl-2.5 pr-6 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer border ${
+                          isSelected
+                            ? is18
+                              ? 'bg-red-500 text-white border-red-500 shadow-2xs font-bold'
+                              : 'bg-[#EDE4FF] text-[#5e4373] border-purple-300 shadow-2xs font-bold'
+                            : is18
+                              ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                              : 'bg-[#FAF7FF] text-gray-600 border-purple-100 hover:bg-purple-50'
+                        }`}
+                      >
+                        {is18 ? '🔞 18+' : tag}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeletePresetTagPermanently(tag, e)}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-red-100 hover:bg-red-500 text-red-600 hover:text-white flex items-center justify-center text-[9px] cursor-pointer transition-colors"
+                        title={`Xóa vĩnh viễn tag "${tag}" khỏi toàn bộ trang web`}
+                      >
+                        <X size={9} />
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -435,15 +478,15 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
                 value={customTagInput}
                 onChange={(e) => setCustomTagInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCustomTag(); } }}
-                placeholder="Thêm tag tùy chỉnh..."
+                placeholder="Thêm tag mới..."
                 className="bg-[#FAF7FF] border border-purple-100 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-purple-300 flex-1 max-w-xs"
               />
               <button
                 type="button"
                 onClick={handleAddCustomTag}
-                className="px-3.5 py-1.5 bg-[#EDE4FF] hover:bg-[#ded2fb] text-purple-950 text-xs font-bold rounded-xl transition-colors flex items-center gap-1 cursor-pointer shadow-2xs"
+                className="px-3.5 py-1.5 bg-[#EDE4FF] hover:bg-[#ded2fb] text-[#5e4373] text-xs font-bold rounded-xl transition-colors flex items-center gap-1 cursor-pointer shadow-2xs"
               >
-                <Plus size={13} /> Thêm Tag
+                <Plus size={13} /> Thêm Tag Mới
               </button>
             </div>
           </div>
@@ -458,10 +501,10 @@ export const CharacterFormModal: React.FC<CharacterFormModalProps> = ({ onClose,
             </button>
             <button 
               type="submit" 
-              disabled={isSubmitting} 
-              className="px-7 py-2.5 rounded-xl bg-gradient-to-r from-[#D8CEF6] to-[#FFE8F7] hover:from-[#cbbeee] hover:to-[#ffd5f3] text-purple-950 font-black shadow-md border border-white disabled:opacity-50 text-xs sm:text-sm cursor-pointer transition-all hover:scale-102 active:scale-98"
+              disabled={isSubmitting || isCompressingImage} 
+              className="px-7 py-2.5 rounded-xl bg-gradient-to-r from-[#D8CEF6] to-[#FFE8F7] hover:from-[#cbbeee] hover:to-[#ffd5f3] text-[#5e4373] font-bold shadow-md border border-white disabled:opacity-50 text-xs sm:text-sm cursor-pointer transition-all hover:scale-102 active:scale-98"
             >
-              {isSubmitting ? 'Đang lưu cập nhật...' : 'Lưu Thay Đổi Ngay ✨'}
+              {isSubmitting ? 'Đang lưu lên hệ thống...' : 'Lưu Thay Đổi Ngay ✨'}
             </button>
           </div>
         </form>

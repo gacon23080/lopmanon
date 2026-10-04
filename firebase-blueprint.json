@@ -1,27 +1,72 @@
 {
-  "collections": {
-    "characters": {
-      "fields": {
-        "name": "string",
-        "bio": "string",
-        "plot": "string",
-        "link": "string",
-        "tags": "array",
-        "createdAt": "timestamp"
-      }
+  "entities": {
+    "Character": {
+      "title": "Character",
+      "description": "A kindergarten character profile managed by the admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "age": { "type": "string" },
+        "birthday": { "type": "string" },
+        "likes": { "type": "string" },
+        "dislikes": { "type": "string" },
+        "bio": { "type": "string" },
+        "story": { "type": "string" },
+        "plot": { "type": "string" },
+        "tags": { "type": "array" },
+        "imageUrl": { "type": "string" },
+        "linkUrl": { "type": "string" },
+        "linkLabel": { "type": "string" },
+        "googleAiLink": { "type": "string" },
+        "youtubeMusicUrl": { "type": "string" },
+        "is18Plus": { "type": "boolean" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "name", "bio", "tags", "createdAt"]
     },
-    "feedbacks": {
-      "fields": {
-        "characterId": "string",
-        "content": "string",
-        "timestamp": "timestamp"
-      }
+    "Feedback": {
+      "title": "Feedback",
+      "description": "A sticky note or private message sent to a character or teacher.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "characterId": { "type": "string" },
+        "characterName": { "type": "string" },
+        "senderName": { "type": "string" },
+        "color": { "type": "string" },
+        "content": { "type": "string" },
+        "likes": { "type": "number" },
+        "timestamp": { "type": "number" },
+        "isPrivateToTeacher": { "type": "boolean" },
+        "visitorId": { "type": "string" },
+        "adminReply": { "type": "string" },
+        "adminRepliedAt": { "type": "number" }
+      },
+      "required": ["characterId", "content", "timestamp"]
     },
-    "appStats": {
-      "fields": {
-        "patCount": "number",
-        "studentCount": "number"
+    "Setting": {
+      "title": "Setting",
+      "description": "Global application settings including teacherProfile, schoolMusic, and appMeta.",
+      "type": "object",
+      "properties": {
+        "updatedAt": { "type": "number" }
       }
+    }
+  },
+  "firestore": {
+    "/characters/{characterId}": {
+      "schema": "Character",
+      "description": "Stores character profiles."
+    },
+    "/feedbacks/{feedbackId}": {
+      "schema": "Feedback",
+      "description": "Stores visitor sticky notes and messages."
+    },
+    "/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "Stores global app configuration (appMeta, teacherProfile, schoolMusic)."
     }
   }
 }

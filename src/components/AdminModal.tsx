@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Lock, MessageSquare, Plus, Edit, LogOut, Trash2, Users, ArrowLeft, Tag as TagIcon } from 'lucide-react';
 import { soundManager } from '../lib/audio';
-import { Character } from '../lib/data';
+import { Character, getAvailablePresetTags, getAvailablePresetTagsSync, registerTagsByAdmin } from '../lib/data';
 
 interface AdminModalProps {
   onClose: () => void;
@@ -10,6 +10,7 @@ interface AdminModalProps {
   isAdmin: boolean;
   onOpenTeacherEdit: () => void;
   onOpenAddCharacter: () => void;
+  onEditCharacter?: (char: Character) => void;
   onOpenViewFeedbacks: () => void;
   onLogout: () => void;
   characters?: Character[];
@@ -23,6 +24,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   isAdmin,
   onOpenTeacherEdit,
   onOpenAddCharacter,
+  onEditCharacter,
   onOpenViewFeedbacks,
   onLogout,
   characters = [],
@@ -35,8 +37,31 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [activeTab, setActiveTab] = useState<'menu' | 'manageCharacters' | 'manageTags'>('menu');
   const [charSearch, setCharSearch] = useState('');
   const [tagSearch, setTagSearch] = useState('');
+  const [newTagInput, setNewTagInput] = useState('');
+  const [isAddingTag, setIsAddingTag] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingTag, setDeletingTag] = useState<string | null>(null);
+  const [presetTags, setPresetTags] = useState<string[]>(() => getAvailablePresetTagsSync());
+
+  React.useEffect(() => {
+    getAvailablePresetTags().then(setPresetTags);
+  }, [characters]);
+
+  const handleAddNewTag = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = newTagInput.trim();
+    if (!clean) return;
+    setIsAddingTag(true);
+    try {
+      soundManager.playSparkle();
+      await registerTagsByAdmin([clean]);
+      const updated = await getAvailablePresetTags();
+      setPresetTags(updated);
+      setNewTagInput('');
+    } finally {
+      setIsAddingTag(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,6 +91,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     setDeletingTag(tag);
     try {
       soundManager.playPop();
+      setPresetTags(prev => prev.filter(t => t !== tag));
       await onDeleteTag(tag);
     } catch (err) {
       console.error("Error deleting tag:", err);
@@ -79,8 +105,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     (c.tags || []).some(t => t.toLowerCase().includes(charSearch.toLowerCase()))
   );
 
-  // Extract all unique tags and count usage
-  const allUniqueTags = Array.from(new Set(characters.flatMap(c => c.tags || [])));
+  // Extract all unique tags (both on characters and in preset tags)
+  const allUniqueTags = Array.from(new Set([...characters.flatMap(c => c.tags || []), ...presetTags]));
   const filteredTags = allUniqueTags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase()));
 
   if (typeof document === 'undefined') return null;
@@ -164,22 +190,37 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Delete Button */}
-                      <button
-                        disabled={deletingId === char.id}
-                        onClick={() => handleDelete(char.id, char.name)}
-                        className="px-3 py-2 bg-red-500 hover:bg-red-600 active:scale-95 text-white text-xs font-black rounded-xl shadow-xs transition-all flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
-                        title="Xóa bé rắn này ngay"
-                      >
-                        {deletingId === char.id ? (
-                          <span className="animate-spin text-xs">⏳</span>
-                        ) : (
-                          <>
-                            <Trash2 size={13} />
-                            <span>Xóa</span>
-                          </>
+                      {/* Edit & Delete Buttons */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {onEditCharacter && (
+                          <button
+                            onClick={() => {
+                              onClose();
+                              onEditCharacter(char);
+                            }}
+                            className="px-2.5 py-2 bg-purple-100 hover:bg-purple-200 active:scale-95 text-purple-900 text-xs font-black rounded-xl shadow-xs transition-all flex items-center gap-1 cursor-pointer"
+                            title="Sửa thông tin bé rắn này"
+                          >
+                            <Edit size={13} />
+                            <span>Sửa</span>
+                          </button>
                         )}
-                      </button>
+                        <button
+                          disabled={deletingId === char.id}
+                          onClick={() => handleDelete(char.id, char.name)}
+                          className="px-3 py-2 bg-red-500 hover:bg-red-600 active:scale-95 text-white text-xs font-black rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          title="Xóa bé rắn này ngay"
+                        >
+                          {deletingId === char.id ? (
+                            <span className="animate-spin text-xs">⏳</span>
+                          ) : (
+                            <>
+                              <Trash2 size={13} />
+                              <span>Xóa</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -210,6 +251,25 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   <p className="text-[11px] text-gray-600">Tổng cộng {allUniqueTags.length} tag đang dùng trong lớp</p>
                 </div>
               </div>
+
+              {/* Add New Tag Form */}
+              <form onSubmit={handleAddNewTag} className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Nhập tên tag mới để thêm vào hệ thống..."
+                  value={newTagInput}
+                  onChange={(e) => setNewTagInput(e.target.value)}
+                  className="flex-1 bg-white border border-purple-200 rounded-xl px-3.5 py-2 text-xs outline-none focus:border-purple-400"
+                />
+                <button
+                  type="submit"
+                  disabled={isAddingTag || !newTagInput.trim()}
+                  className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-black rounded-xl shadow-xs flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-50"
+                >
+                  <Plus size={14} />
+                  <span>Thêm Tag</span>
+                </button>
+              </form>
 
               {/* Search Tag input */}
               <input

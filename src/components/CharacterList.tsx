@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, Edit2, Trash2, MessageSquare, ExternalLink, BookOpen, Plus, ShieldAlert, Dices, Music, Sparkles, X, Tag as TagIcon } from 'lucide-react';
-import { Character, deleteCharacter, deleteTagGlobally } from '../lib/data';
+import { Character, deleteCharacter, deleteTagGlobally, getAvailablePresetTags, getAvailablePresetTagsSync } from '../lib/data';
 import { CharacterFormModal } from './CharacterFormModal';
 import { CharacterDetailModal } from './CharacterDetailModal';
 import { SubmitFeedbackModal } from './Modals';
@@ -40,9 +40,31 @@ export const CharacterList: React.FC<CharacterListProps> = ({
   // Tag Deletion state
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [isDeletingTag, setIsDeletingTag] = useState(false);
+  const [availableTags, setAvailableTags] = useState<string[]>(() => getAvailablePresetTagsSync());
   
   // Age verification state for pending action
   const [pending18Char, setPending18Char] = useState<Character | null>(null);
+
+  React.useEffect(() => {
+    getAvailablePresetTags().then(setAvailableTags).catch(() => {});
+  }, [characters]);
+
+  React.useEffect(() => {
+    if (selectedDetailChar) {
+      const latest = characters.find(c => c.id === selectedDetailChar.id);
+      if (latest) {
+        setSelectedDetailChar(latest);
+      } else if (characters.length > 0) {
+        setSelectedDetailChar(null);
+      }
+    }
+    if (selectedTag !== 'Tất cả') {
+      const stillExists = characters.some(c => (c.tags || []).includes(selectedTag));
+      if (!stillExists) {
+        setSelectedTag('Tất cả');
+      }
+    }
+  }, [characters, selectedDetailChar, selectedTag]);
 
   const isChar18Plus = (char: Character): boolean => {
     return !!char.is18Plus || (char.tags || []).some(t => ['18+', 'r18', 'h+', 'nsfw', '+18'].includes(t.toLowerCase().trim()));
@@ -90,6 +112,7 @@ export const CharacterList: React.FC<CharacterListProps> = ({
     try {
       setIsDeletingTag(true);
       soundManager.playPop();
+      setAvailableTags(prev => prev.filter(t => t !== tagToDelete));
       const updated = await deleteTagGlobally(tagToDelete);
       if (selectedTag === tagToDelete) {
         setSelectedTag('Tất cả');
@@ -114,8 +137,8 @@ export const CharacterList: React.FC<CharacterListProps> = ({
     setShowFormModal(true);
   };
 
-  // Get list of all unique tags across characters for filtering
-  const allTags = ['Tất cả', ...Array.from(new Set(characters.flatMap(c => c.tags || [])))];
+  // Get list of all unique tags across characters and active preset/custom tags for filtering
+  const allTags = ['Tất cả', ...Array.from(new Set([...characters.flatMap(c => c.tags || []), ...availableTags]))];
 
   const filteredCharacters = characters.filter(c => {
     const matchesTag = selectedTag === 'Tất cả' || (c.tags && c.tags.includes(selectedTag));

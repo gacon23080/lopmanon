@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Heart, HeartCrack, Cake, Calendar, BookOpen, Volume2, VolumeX, MessageSquare, ExternalLink, ShieldAlert, Edit2 } from 'lucide-react';
 import { Character } from '../lib/data';
@@ -21,39 +21,88 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
   isAdmin = false,
   onEditCharacter,
 }) => {
-  const { isPlaying: isSchoolMusicPlaying, toggleMusic: toggleSchoolMusic, setCharPlaying, stopCharMusicSignal } = useMusic();
+  const {
+    isPlaying: isSchoolMusicPlaying,
+    toggleMusic: toggleSchoolMusic,
+    setCharPlaying,
+    setCharModalOpen,
+    stopCharMusicSignal,
+  } = useMusic();
+
   const [isPlayingMusic, setIsPlayingMusic] = useState(true);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const initialSignalRef = useRef(stopCharMusicSignal);
   const youtubeId = extractYouTubeId(character.youtubeMusicUrl);
 
-  // Khi mở hồ sơ nhân vật có nhạc riêng -> tạm dừng nhạc nền trường học trong suốt lúc mở modal
-  // Khi đóng modal -> trả lại trạng thái để nhạc nền trường học tự phát tiếp (nếu đang bật)
+  const sendCharCommand = useCallback((func: string, args: any[] = []) => {
+    try {
+      if (iframeRef.current && iframeRef.current.contentWindow) {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({
+            event: 'command',
+            func,
+            args,
+          }),
+          '*'
+        );
+      }
+    } catch {}
+  }, []);
+
+  const triggerCharPlay = useCallback(() => {
+    sendCharCommand('unMute', []);
+    sendCharCommand('setVolume', [100]);
+    sendCharCommand('playVideo', []);
+  }, [sendCharCommand]);
+
+  // Khi mở hồ sơ nhân vật có nhạc riêng -> báo cho MusicPlayer tạm dừng nhạc nền trường học
   useEffect(() => {
     if (youtubeId) {
-      setCharPlaying(true);
+      setCharModalOpen(true);
+    } else {
+      setCharModalOpen(false);
     }
     return () => {
+      setCharModalOpen(false);
       setCharPlaying(false);
     };
-  }, [youtubeId, setCharPlaying]);
+  }, [youtubeId, setCharModalOpen, setCharPlaying]);
 
-  // Nếu người dùng bấm nút tắt nhạc chung từ thanh điều khiển -> tắt luôn nhạc nhân vật
+  // Đồng bộ trạng thái nhạc nhân vật đang phát hay đã tắt
   useEffect(() => {
-    if (stopCharMusicSignal > 0) {
+    if (youtubeId && isPlayingMusic) {
+      setCharPlaying(true);
+      const t1 = window.setTimeout(triggerCharPlay, 150);
+      const t2 = window.setTimeout(triggerCharPlay, 450);
+      const t3 = window.setTimeout(triggerCharPlay, 900);
+      return () => {
+        window.clearTimeout(t1);
+        window.clearTimeout(t2);
+        window.clearTimeout(t3);
+      };
+    } else {
+      setCharPlaying(false);
+    }
+  }, [youtubeId, isPlayingMusic, setCharPlaying, triggerCharPlay]);
+
+  // Chỉ tắt nhạc nhân vật khi người dùng bấm nút tắt nhạc chung LÚC modal đang mở (không kích hoạt nhầm lúc vừa mở modal!)
+  useEffect(() => {
+    if (stopCharMusicSignal !== initialSignalRef.current) {
+      initialSignalRef.current = stopCharMusicSignal;
       setIsPlayingMusic(false);
     }
   }, [stopCharMusicSignal]);
 
   const toggleCharacterMusic = () => {
     soundManager.playPop();
-    const nextState = !isPlayingMusic;
-    setIsPlayingMusic(nextState);
+    setIsPlayingMusic(prev => !prev);
   };
 
   // Safe close: ngắt hoàn toàn bài hát của nhân vật trước khi đóng
   const handleClose = () => {
     setIsPlayingMusic(false);
     setCharPlaying(false);
+    setCharModalOpen(false);
     onClose();
   };
 
@@ -76,28 +125,31 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
       />
 
       {/* Embedded In-App YouTube Audio Player for Character Theme:
-          Chỉ mount khi isPlayingMusic === true. Khi bấm Tắt nhạc -> gỡ hoàn toàn khỏi DOM, tắt tiếng 100% tức thì! */}
+          Đặt trong vùng viewport (bottom: 0, right: 0) để trình duyệt luôn cho phép autoplay ngay lập tức!
+          Khi bấm Tắt nhạc -> gỡ hoàn toàn khỏi DOM, tắt tiếng 100% tức thì! */}
       {youtubeId && isPlayingMusic && (
         <div 
           aria-hidden="true"
           style={{
             position: 'fixed',
-            top: '-9999px',
-            left: '-9999px',
-            width: '320px',
-            height: '240px',
-            opacity: 0.001,
+            bottom: '0px',
+            right: '0px',
+            width: '240px',
+            height: '160px',
+            opacity: 0.01,
             pointerEvents: 'none',
-            zIndex: -9999,
+            zIndex: 1,
+            overflow: 'hidden',
           }}
         >
           <iframe
             ref={iframeRef}
-            width="320"
-            height="240"
-            src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1&autoplay=1&loop=1&playlist=${youtubeId}&playsinline=1`}
+            width="240"
+            height="160"
+            src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1&autoplay=1&controls=0&loop=1&playlist=${youtubeId}&playsinline=1`}
             title={`Nhạc nền của ${character.name}`}
             allow="autoplay; encrypted-media; picture-in-picture"
+            onLoad={triggerCharPlay}
           />
         </div>
       )}
